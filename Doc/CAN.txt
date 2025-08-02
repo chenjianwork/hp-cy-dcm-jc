@@ -1,0 +1,116 @@
+
+#---------------------------------------------------------------------------------------------------------------------#
+    CAN发送
+#---------------------------------------------------------------------------------------------------------------------#
+
+让我详细解释一下CAN ID过滤的工作原理。
+
+在屏蔽位模式(CAN_FilterMode_IdMask)下，过滤是通过ID和掩码(Mask)的配合工作来实现的。让我用具体的例子说明：
+
+1. **基准ID设置**:
+```c
+// 使用0x2080作为基准ID
+CAN_FilterInitStructure.CAN_FilterIdHigh = (0x2080 << 3) >> 16;    // 高16位
+CAN_FilterInitStructure.CAN_FilterIdLow = ((0x2080 << 3) & 0xFFFF) | CAN_ID_EXT;  // 低16位
+```
+
+2. **掩码设置**:
+```c
+// 掩码设置
+CAN_FilterInitStructure.CAN_FilterMaskIdHigh = 0xFFFF;  // 高16位掩码
+CAN_FilterInitStructure.CAN_FilterMaskIdLow = 0xF000 | CAN_ID_EXT;  // 低16位掩码
+```
+
+工作原理：
+1. 掩码中的0表示"必须匹配"，1表示"不关心"
+2. 在我们的配置中：
+   - 高20位掩码都是1(0xFFFF)，表示这些位不关心，可以任意值
+   - 低12位掩码是0(0xF000)，表示这些位必须匹配
+
+让我们以几个具体的ID为例：
+
+```
+基准ID: 0x2080
+掩码:   0xFFFFF000
+
+接收ID: 0x4080
+比较过程：
+基准ID: 0010 0000 1000 0000 (0x2080)
+接收ID: 0100 0000 1000 0000 (0x4080)
+掩码:   1111 1111 1111 0000 (0xFFFFF000)
+结果:   通过 (因为低12位匹配，高20位不关心)
+
+接收ID: 0x6080
+比较过程：
+基准ID: 0010 0000 1000 0000 (0x2080)
+接收ID: 0110 0000 1000 0000 (0x6080)
+掩码:   1111 1111 1111 0000 (0xFFFFF000)
+结果:   通过 (因为低12位匹配，高20位不关心)
+
+接收ID: 0x2081
+比较过程：
+基准ID: 0010 0000 1000 0000 (0x2080)
+接收ID: 0010 0000 1000 0001 (0x2081)
+掩码:   1111 1111 1111 0000 (0xFFFFF000)
+结果:   不通过 (因为低12位不匹配)
+```
+
+所以，这个配置可以接收所有以0x080结尾的ID，包括：
+- 0x2080 (0010 0000 1000 0000)
+- 0x4080 (0100 0000 1000 0000)
+- 0x6080 (0110 0000 1000 0000)
+- 0x8080 (1000 0000 1000 0000)
+- 0xc080 (1100 0000 1000 0000)
+- 0x10080 (0001 0000 0000 1000 0000)
+- 0x12080 (0001 0010 0000 1000 0000)
+- 0x14080 (0001 0100 0000 1000 0000)
+- 0x16080 (0001 0110 0000 1000 0000)
+- 0x18080 (0001 1000 0000 1000 0000)
+- 0x1a080 (0001 1010 0000 1000 0000)
+- 0x1c080 (0001 1100 0000 1000 0000)
+- 0x0191A080 (0000 0001 1001 0001 1010 0000 1000 0000)
+
+因为：
+1. 所有这些ID的低12位都是0x080
+2. 掩码设置为只关心低12位(0xF000)
+3. 高20位不关心(0xFFFF)
+
+这就是为什么使用0x2080作为基准ID，却能接收所有以0x080结尾的ID的原因。掩码的设置使得过滤器只检查ID的低12位是否匹配，而忽略高20位的值。
+
+
+
+#---------------------------------------------------------------------------------------------------------------------#
+    CAN接收
+#---------------------------------------------------------------------------------------------------------------------#
+
+typedef struct
+{
+  uint32_t StdId;  /*!< Specifies the standard identifier.
+                        This parameter can be a value between 0 to 0x7FF. */
+
+  uint32_t ExtId;  /*!< Specifies the extended identifier.
+                        This parameter can be a value between 0 to 0x1FFFFFFF. */
+
+  uint8_t IDE;     /*!< Specifies the type of identifier for the message that 
+                        will be transmitted. This parameter can be a value 
+                        of @ref CAN_identifier_type */
+
+  uint8_t RTR;     /*!< Specifies the type of frame for the message that will 
+                        be transmitted. This parameter can be a value of 
+                        @ref CAN_remote_transmission_request */
+
+  uint8_t DLC;     /*!< Specifies the length of the frame that will be 
+                        transmitted. This parameter can be a value between 
+                        0 to 8 */
+
+  uint8_t Data[8]; /*!< Contains the data to be transmitted. It ranges from 0 
+                        to 0xFF. */
+} CanTxMsg;
+
+
+/***************************CAN *********************************************/
+定时器：
+	在线帧	100ms
+	DI、DO输出	50ms (单帧50ms)
+	监控值(流量计、压力传感器、DI、DO数据) 15ms
+	 

@@ -1,0 +1,15 @@
+*.o
+*.d
+*.bin
+*.elf
+*.map
+*.mxproject
+/flash.lds
+
+# IDE files
+/MDK-ARM
+/.cproject
+/.project
+/.settings
+
+/.vscode
