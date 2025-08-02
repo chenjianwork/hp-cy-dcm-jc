@@ -21,6 +21,26 @@
 
 /*!
 ****************************************************************************************************
+* 常量定义
+****************************************************************************************************
+*/
+struct _DRVMGR_DIO {
+	uint8_t         y_blink_enable[5];
+	uint8_t 	    last_btn_state[10];
+	uint8_t         x_state[14];
+    bool            y_blink_on[5];
+	uint16_t        OutPut_Data_Arrays;
+	struct _TIMER   Tmr_Run_Y[10];
+};
+
+/*!
+****************************************************************************************************
+* 类型定义
+****************************************************************************************************
+*/
+static struct _DRVMGR_DIO G_DIO_MGR;  // DIO管理结构
+/*!
+****************************************************************************************************
 * 类型定义
 ****************************************************************************************************
 */
@@ -37,7 +57,7 @@
 ****************************************************************************************************
 */
 static void DRVMGR_DIOHwPinInit(void);
-
+static void DRVMGR_DIO_DeviceOutControl(uint8_t device_num);
 /*!
 ****************************************************************************************************
 * 接口函数
@@ -55,6 +75,19 @@ static void DRVMGR_DIOHwPinInit(void);
 void DRVMGR_DIOInit(void)
 {
 	DRVMGR_DIOHwPinInit();
+	G_DIO_MGR.OutPut_Data_Arrays = 0;
+	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+	for(int i=0; i<10; i++)
+	{
+		DRVMGR_TimerStart(&G_DIO_MGR.Tmr_Run_Y[i], 100); // 点亮时长
+	}
+	for(int i=0; i<14; i++)
+		G_DIO_MGR.x_state[i] = 0;
+	for(int i=0; i<5; i++)
+		G_DIO_MGR.y_blink_on[i] = false;
+
+	for(int i=0; i<10; i++)
+		G_DIO_MGR.last_btn_state[i] = 0;
 }
 
 /*!
@@ -68,9 +101,85 @@ void DRVMGR_DIOInit(void)
 */
 void DRVMGR_DIOHandle(void)
 {
-
+	DRVMGR_DIO_DeviceOutControl(1);
 }
 
+
+
+/*!
+****************************************************************************************************
+* 功能描述：该方法用于19号设备、20号设备外围输出控制
+* 注意事项：NA
+* 输入参数：设备号（19号设备、20号设备）
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+static void DRVMGR_DIO_DeviceOutControl(uint8_t device_num)
+{
+	uint16_t all_di_status;
+
+	DRVMGR_DIO_DIGetBitsStatus(&all_di_status);
+
+	G_DIO_MGR.x_state[0] = (all_di_status & 0x0001) ? 1 : 0;  // 获取X1状态
+	G_DIO_MGR.x_state[1] = (all_di_status & 0x0002) ? 1 : 0;  // 获取X2状态
+	G_DIO_MGR.x_state[2] = (all_di_status & 0x0004) ? 1 : 0;  // 获取X3状态
+	G_DIO_MGR.x_state[3] = (all_di_status & 0x0008) ? 1 : 0;  // 获取X4状态
+	G_DIO_MGR.x_state[4] = (all_di_status & 0x0010) ? 1 : 0;  // 获取X5状态
+	G_DIO_MGR.x_state[5] = (all_di_status & 0x0020) ? 1 : 0;  // 获取X6状态
+	G_DIO_MGR.x_state[6] = (all_di_status & 0x0040) ? 1 : 0;  // 获取X7状态
+	G_DIO_MGR.x_state[7] = (all_di_status & 0x0080) ? 1 : 0;  // 获取X8状态
+	G_DIO_MGR.x_state[8] = (all_di_status & 0x0100) ? 1 : 0;  // 获取X9状态
+	G_DIO_MGR.x_state[9] = (all_di_status & 0x0200) ? 1 : 0;  // 获取X10状态
+    // ================== 奇数Y（Y1/Y3/Y5/Y7）闪烁控制 ==================
+    for(int i=0; i<5; i++){
+        // 奇数X（X1/X3/X5/X7）下降沿，启动对应Y闪烁
+        if(G_DIO_MGR.last_btn_state[i*2]==0 && G_DIO_MGR.x_state[i*2]==1){
+            G_DIO_MGR.y_blink_enable[i] = 1; // 使能Y闪烁
+        }
+        // 偶数X（X2/X4/X6/X8）下降沿，停止对应Y闪烁并熄灭
+        if(G_DIO_MGR.last_btn_state[i*2+1]==0 && G_DIO_MGR.x_state[i*2+1]==1){
+            G_DIO_MGR.y_blink_enable[i] = 0; // 禁止Y闪烁
+            G_DIO_MGR.y_blink_on[i] = false; // 状态复位
+            G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << (i*2));
+            DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+        }
+        // 更新上一次状态
+        G_DIO_MGR.last_btn_state[i*2] = G_DIO_MGR.x_state[i*2];
+        G_DIO_MGR.last_btn_state[i*2+1] = G_DIO_MGR.x_state[i*2+1];
+    }
+    if(G_DIO_MGR.x_state[5] == 1)
+    {
+    	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 5);   // bit5 = 1 → Y6 低
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    else if(G_DIO_MGR.x_state[5] == 0){
+    	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 5);   // bit5 = 0 → Y6 高
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+	}
+    // 闪烁定时器ID数组
+    for(int i = 0; i < 5; i++) {
+        if(G_DIO_MGR.y_blink_enable[i]) {
+            if (G_DIO_MGR.y_blink_on[i]) {
+                // 点亮状态，判断是否到达熄灭时间
+                if (DRVMGR_TimerIsExpiration(&G_DIO_MGR.Tmr_Run_Y[i])) {
+                    G_DIO_MGR.y_blink_on[i] = false;
+                    DRVMGR_TimerStart(&G_DIO_MGR.Tmr_Run_Y[i], 200); // 熄灭时长
+                    G_DIO_MGR.OutPut_Data_Arrays |= (1 << (i));
+                    DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+                }
+            } else {
+                // 熄灭状态，判断是否到达点亮时间
+                if (DRVMGR_TimerIsExpiration(&G_DIO_MGR.Tmr_Run_Y[i])) {
+                    G_DIO_MGR.y_blink_on[i] = true;
+                    DRVMGR_TimerStart(&G_DIO_MGR.Tmr_Run_Y[i], 100); // 点亮时长
+                    G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << (i));
+                    DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+                }
+            }
+        }
+    }
+}
 void DRVMGR_DIOPutOut(void)
 {
 	GPIO_SetBits(GPIOF, GPIO_Pin_2);

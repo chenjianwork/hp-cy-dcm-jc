@@ -49,4 +49,5 @@ void 	COMMGR_DBGHandle(void);
 void 	COMMGR_CANSendOnlineFrame(void);
 uint8_t COMMGR_CANGetVfdAddress(void);
 
+
 #endif /* COMMANAGER_COMMANAGER_H_ */

@@ -60,6 +60,7 @@ void DRVMGR_Init(void)
 
 	DRVMGR_UARTInit();
 	DRVMGR_CANInit();
+	DRVMGR_DIOPutOut();
 }
 
 /*!

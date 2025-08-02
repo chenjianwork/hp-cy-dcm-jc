@@ -146,7 +146,7 @@ static void COMMGR_CANSendFlowAnalogData(uint32_t can_id, uint8_t cmd);
 static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM);
 static void COMMGR_CANSendDIData(uint32_t can_id);
 static void COMMGR_CANSendDOData(uint32_t can_id);
-
+static void COMMGR_CANGetVFDHwDevNum(void);
 /*!
 ****************************************************************************************************
 * 接口函数
@@ -183,7 +183,7 @@ void COMMGR_CANInit(void)
 	G_CAN_MGR.ACK_can[5] = 0x3c;
 	G_CAN_MGR.ACK_can[6] = 0xc3;
 	G_CAN_MGR.ACK_can[7] = 0x33;
-	G_CAN_MGR.ProtocolModNumber = SYSMGR_Para_HwDevNum();
+	G_CAN_MGR.ProtocolModNumber = 17;
 	// 初始化状态超时检测定时器
 
 	DRVMGR_TimerStart(&G_CAN_MGR.TmrBackup, STATE_TIMEOUT_PERIOD);
@@ -216,7 +216,7 @@ void COMMGR_CANHandle(void)
 {
 	// 实时根据编码器设置CAN通信地址
 	DRVMGR_CANSetup(G_CAN_MGR.Address, CAN_MASK);
-	
+	COMMGR_CANGetVFDHwDevNum();
 	// 判断是否离线
 	if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.Tmr)) {
 		// 重置掉线检测定时器
@@ -748,4 +748,23 @@ static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM){
 uint8_t COMMGR_CANGetVfdAddress(void)
 {
 	return G_CAN_MGR.Vfd_Address;
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：获取VFD设备号
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：
+****************************************************************************************************
+*/
+static void COMMGR_CANGetVFDHwDevNum(void)
+{
+	if((G_CAN_MGR.ProtocolModNumber <= 17) || (G_CAN_MGR.ProtocolModNumber > 20)){
+		G_CAN_MGR.ProtocolModNumber = 17;
+	}
+	else {
+		G_CAN_MGR.ProtocolModNumber = SYSMGR_Para_HwDevNum();
+	}
 }

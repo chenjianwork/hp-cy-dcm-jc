@@ -63,7 +63,7 @@ void SYSMGR_Init(void)
 {
 	SYSMGR_PID_Init();
 	SYSMGR_Params_Init(PARA_PID_SAVE_ADDR);
-	DRVMGR_DIOPutOut();
+//	DRVMGR_DIOPutOut();
 	// 进入不可操作状态
 	SYSMGR_SetRunState(RUNSTATE_IDLE);
 }
