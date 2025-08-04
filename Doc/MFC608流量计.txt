@@ -1,0 +1,135 @@
+### MFC608型流量计Modbus协议解析及C语言读取实现
+
+
+#### 一、协议核心信息（基于Modbus RTU）
+1. **通讯参数**  
+   - 接口：RS-485  
+   - 波特率：默认38400bps（可配置，支持1200~115200）  
+   - 数据格式：8位数据位，无奇偶校验（默认），1位停止位  
+   - 传输方式：半双工异步  
+   - 设备地址：默认1（范围1~247）  
+
+2. **流量数据寄存器**  
+   | 寄存器地址（十进制） | 数据名称       | 数据类型 | 读写权限 | 单位     | 说明                     |
+   |----------------------|----------------|----------|----------|----------|--------------------------|
+   | 1029                 | 质量流量       | float    | 只读     | kg/min   | 需读取该地址获取流量值   |
+
+3. **Modbus功能码**  
+   - 读取数据使用 **0x03**（读取保持寄存器）  
+
+
+#### 二、C语言读取流量的实现步骤
+##### 1. 串口初始化（配置通讯参数）
+   ```c
+   #include <stdio.h>
+   #include <stdlib.h>
+   #include <string.h>
+   #include <unistd.h>
+   #include <fcntl.h>
+   #include <termios.h>
+
+   int uart_init(const char *dev) {
+       int fd = open(dev, O_RDWR | O_NOCTTY | O_NDELAY);
+       if (fd < 0) return -1;
+
+       struct termios opt;
+       tcgetattr(fd, &opt);
+       // 设置波特率38400
+       cfsetispeed(&opt, B38400);
+       cfsetospeed(&opt, B38400);
+       // 8位数据位，无奇偶校验，1位停止位
+       opt.c_cflag &= ~PARENB;    // 无校验
+       opt.c_cflag &= ~CSTOPB;    // 1位停止位
+       opt.c_cflag &= ~CSIZE;
+       opt.c_cflag |= CS8;        // 8数据位
+       // 使能接收
+       opt.c_cflag |= (CLOCAL | CREAD);
+       tcsetattr(fd, TCSANOW, &opt);
+       return fd;
+   }
+   ```
+
+
+##### 2. 构造Modbus读取命令帧
+   - 读取寄存器1029（流量）的命令帧格式：  
+     | 从站地址（1字节） | 功能码（1字节） | 起始地址（2字节） | 读取数量（2字节） | CRC校验（2字节） |
+     |------------------|----------------|------------------|------------------|----------------|
+     | 0x01（默认地址） | 0x03           | 0x0405（1029）   | 0x0002（2个寄存器，float占4字节） | 计算值         |  
+
+   - 命令帧示例：`01 03 04 05 00 02 CRC_H CRC_L`  
+   - CRC计算函数：  
+     ```c
+     unsigned short crc16(unsigned char *buf, int len) {
+         unsigned short crc = 0xFFFF;
+         for (int i = 0; i < len; i++) {
+             crc ^= buf[i];
+             for (int j = 0; j < 8; j++) {
+                 if (crc & 0x0001) {
+                     crc >>= 1;
+                     crc ^= 0xA001;
+                 } else {
+                     crc >>= 1;
+                 }
+             }
+         }
+         return crc;
+     }
+     ```
+
+
+##### 3. 发送命令并接收响应
+   ```c
+   int read_flow(int fd, float *flow) {
+       unsigned char cmd[8] = {0x01, 0x03, 0x04, 0x05, 0x00, 0x02};
+       unsigned short crc = crc16(cmd, 6);
+       cmd[6] = crc & 0xFF;    // CRC低字节
+       cmd[7] = (crc >> 8) & 0xFF;  // CRC高字节
+
+       // 发送命令
+       write(fd, cmd, 8);
+       usleep(100000);  // 等待响应（根据波特率调整）
+
+       // 接收响应（正常响应长度：9字节）
+       unsigned char resp[256];
+       int len = read(fd, resp, sizeof(resp));
+       if (len != 9 || resp[0] != 0x01 || resp[1] != 0x03) {
+           return -1;  // 响应错误
+       }
+
+       // 解析float数据（文档默认字节顺序：1-0-3-2）
+       unsigned char data[4] = {resp[3], resp[2], resp[5], resp[4]};
+       *flow = *(float*)data;
+       return 0;
+   }
+   ```
+
+
+##### 4. 主函数调用
+   ```c
+   int main() {
+       int fd = uart_init("/dev/ttyUSB0");  // 串口设备（根据实际修改）
+       if (fd < 0) {
+           printf("串口初始化失败\n");
+           return -1;
+       }
+
+       float flow;
+       if (read_flow(fd, &flow) == 0) {
+           printf("当前质量流量：%.2f kg/min\n", flow);
+       } else {
+           printf("读取失败\n");
+       }
+
+       close(fd);
+       return 0;
+   }
+   ```
+
+
+#### 三、关键注意事项
+1. **字节顺序**：文档规定float类型默认字节顺序为“1-0-3-2”，解析时需按此重组字节（如代码中`data[4]`的排列）。  
+2. **CRC校验**：发送和接收均需校验，避免数据传输错误。  
+3. **设备地址与波特率**：若流量计参数被修改，需同步调整代码中的地址（`0x01`）和波特率（`B38400`）。  
+4. **超时处理**：实际应用中需添加超时重发机制，确保稳定性。  
+
+通过以上步骤，可实现C语言对MFC608型流量计的流量读取。

@@ -31,7 +31,7 @@
 #define CAN_ID_HOST_STATE   (0x00012080)  // 主机状态命令ID 
 #define CAN_ID_HOST_STATE2  (0x00016080)  // 2号泵主机状态命令ID
 #define CAN_ID_VFD_CONTROL  (0x00034080)  // 变频器控制命令ID
-
+#define CAN_ID_FIREALARM    (0x00034080)  // 火警报警命令ID
 
 // 实时数据CAN ID定义
 #define MODULE17_CAN_ID    (0x00022040)  // CC01协议模块
@@ -748,4 +748,36 @@ static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM){
 uint8_t COMMGR_CANGetVfdAddress(void)
 {
 	return G_CAN_MGR.Vfd_Address;
+}
+
+
+/*!
+****************************************************************************************************
+* 功能描述：发送火警报警信息数据到CAN总线
+* 注意事项：NA
+* 输入参数：can_id -- CAN ID
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+static void COMMGR_CANSendFireAlarmData(uint32_t can_id)
+{
+    struct _CAN_MSG canmsg;
+    uint16_t do_status;
+
+    do_status = DRVMGR_DIO_GetDOBits();
+    DRVMGR_DIO_DOSetBitsStatus(do_status);
+
+    //前两个字节有效，其余字节目前无效
+    for (int i = 0; i < 8; i++) {
+    	if(i>1){
+    		canmsg.Body[i] = 0;
+    	}
+    	else{
+    		canmsg.Body[i] = (do_status >> (i * 8)) & 0xFF; // 拆分为8字节
+    	}
+    }
+    canmsg.ID = can_id;
+    canmsg.Len = 8;
+    COMMGR_CANSendResponse(&canmsg);
 }
