@@ -327,22 +327,22 @@ static void COMMGR_DBGGetPIDInfo(const PDBG_FRAME rxFrame)
 
     ///////////////////比例调节阀环//////////////////////////////////////////
     //比例调节系数
-    BitConverter_SingleToBytes(SYSMGR_Para_ValvePIDKD(), txBuf, &txLen);
+    BitConverter_SingleToBytes(DRVMGR_ADCGetValue(2)/100, txBuf, &txLen);
 
     //积分调节系数
-    BitConverter_SingleToBytes(SYSMGR_Para_ValvePIDKI(), txBuf, &txLen);
+    BitConverter_SingleToBytes(DRVMGR_ADCGetValue(3)/100, txBuf, &txLen);
 
     //微分调节系数
-    BitConverter_SingleToBytes(SYSMGR_Para_ValvePIDKD(), txBuf, &txLen);
+    BitConverter_SingleToBytes(DRVMGR_ADCGetValue(2)/100, txBuf, &txLen);
 
     //误差最大值
-    BitConverter_SingleToBytes(SYSMGR_Para_ValvePIDErrMax(), txBuf, &txLen);
+    BitConverter_SingleToBytes(DRVMGR_ADCGetValue(3)/100, txBuf, &txLen);
 
     //积分最大值
-    BitConverter_SingleToBytes(SYSMGR_Para_ValvePIDSumMax(), txBuf, &txLen);
+    BitConverter_SingleToBytes(DRVMGR_ADCGetValue(3)/100, txBuf, &txLen);
 
     //输出最大值
-    BitConverter_SingleToBytes(SYSMGR_Para_ValvePIDOutMax(), txBuf, &txLen);
+    BitConverter_SingleToBytes(DRVMGR_ADCGetValue(3), txBuf, &txLen);
 
     // 发送消息
     COMMGR_DBGSendFrame(rxFrame, &txBuf[0], txLen);

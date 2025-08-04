@@ -42,7 +42,8 @@
 * 本地声明
 ****************************************************************************************************
 */
-
+	struct _TIMER tmrdac;
+	bool 	isOn = false;
 /*!
 ****************************************************************************************************
 * 接口函数
@@ -60,6 +61,8 @@
 void DRVMGR_DACInit(void)
 {
 	/* NOTHING TO DO */
+	DRVMGR_TimerStart(&tmrdac, 200);
+	isOn = false;
 }
 
 /*!
@@ -74,6 +77,20 @@ void DRVMGR_DACInit(void)
 void DRVMGR_DACHandle(void)
 {
 	/* NOTHING TO DO */
+	if (isOn) {
+		if (DRVMGR_TimerIsExpiration(&tmrdac)) {
+			isOn = false;
+			DRVMGR_TimerStart(&tmrdac, 500 - 300);
+			DRVMGR_DACSetOutputCurrent(DRVID_DAC_1,0xFFFF);
+		}
+	} else {
+		if (DRVMGR_TimerIsExpiration(&tmrdac)) {
+			isOn = true;
+			DRVMGR_TimerStart(&tmrdac, 200);
+			DRVMGR_DACSetOutputCurrent(DRVID_DAC_2,0x3FFF);
+
+		}
+	}
 }
 
 /*!
