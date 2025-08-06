@@ -63,7 +63,7 @@ int main(int argc, const char* argv[])
 	// 加上断言可以确保避免一些错误
 	STATIC_ASSERT(MAJOR_ERR_TYPE_LAST <= ERR_TYPE_MAX_NUMS);
 
-	DRVMGR_Init();
+ 	DRVMGR_Init();
 	DEVMGR_Init();
 	COMMGR_Init();
 	SYSMGR_Init();

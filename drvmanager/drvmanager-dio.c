@@ -25,10 +25,10 @@
 ****************************************************************************************************
 */
 struct _DRVMGR_DIO {
-	uint8_t         y_blink_enable[5];
+	uint8_t         y_blink_enable[6];
 	uint8_t 	    last_btn_state[10];
 	uint8_t         x_state[14];
-    bool            y_blink_on[5];
+    bool            y_blink_on[6];
 	uint16_t        OutPut_Data_Arrays;
 	struct _TIMER   Tmr_Run_Y[10];
 };
@@ -83,7 +83,7 @@ void DRVMGR_DIOInit(void)
 	}
 	for(int i=0; i<14; i++)
 		G_DIO_MGR.x_state[i] = 0;
-	for(int i=0; i<5; i++)
+	for(int i=0; i<6; i++)
 		G_DIO_MGR.y_blink_on[i] = false;
 
 	for(int i=0; i<10; i++)
@@ -117,6 +117,7 @@ void DRVMGR_DIOHandle(void)
 */
 static void DRVMGR_DIO_DeviceOutControl(uint8_t device_num)
 {
+#if 1
 	uint16_t all_di_status;
 
 	DRVMGR_DIO_DIGetBitsStatus(&all_di_status);
@@ -131,8 +132,11 @@ static void DRVMGR_DIO_DeviceOutControl(uint8_t device_num)
 	G_DIO_MGR.x_state[7] = (all_di_status & 0x0080) ? 1 : 0;  // 获取X8状态
 	G_DIO_MGR.x_state[8] = (all_di_status & 0x0100) ? 1 : 0;  // 获取X9状态
 	G_DIO_MGR.x_state[9] = (all_di_status & 0x0200) ? 1 : 0;  // 获取X10状态
+	G_DIO_MGR.x_state[10] = (all_di_status & 0x0400) ? 1 : 0; // 获取X11状态
+	G_DIO_MGR.x_state[11] = (all_di_status & 0x0800) ? 1 : 0; // 获取X12状态
+	G_DIO_MGR.x_state[12] = (all_di_status & 0x1000) ? 1 : 0; // 获取X13状态
     // ================== 奇数Y（Y1/Y3/Y5/Y7）闪烁控制 ==================
-    for(int i=0; i<5; i++){
+    for(int i=0; i<6; i++){
         // 奇数X（X1/X3/X5/X7）下降沿，启动对应Y闪烁
         if(G_DIO_MGR.last_btn_state[i*2]==0 && G_DIO_MGR.x_state[i*2]==1){
             G_DIO_MGR.y_blink_enable[i] = 1; // 使能Y闪烁
@@ -141,13 +145,14 @@ static void DRVMGR_DIO_DeviceOutControl(uint8_t device_num)
         if(G_DIO_MGR.last_btn_state[i*2+1]==0 && G_DIO_MGR.x_state[i*2+1]==1){
             G_DIO_MGR.y_blink_enable[i] = 0; // 禁止Y闪烁
             G_DIO_MGR.y_blink_on[i] = false; // 状态复位
-            G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << (i*2));
+            G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << (i));
             DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
         }
         // 更新上一次状态
         G_DIO_MGR.last_btn_state[i*2] = G_DIO_MGR.x_state[i*2];
         G_DIO_MGR.last_btn_state[i*2+1] = G_DIO_MGR.x_state[i*2+1];
     }
+
     if(G_DIO_MGR.x_state[5] == 1)
     {
     	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 5);   // bit5 = 1 → Y6 低
@@ -157,8 +162,38 @@ static void DRVMGR_DIO_DeviceOutControl(uint8_t device_num)
     	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 5);   // bit5 = 0 → Y6 高
     	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
 	}
+
+
+    if(G_DIO_MGR.x_state[10] == 1)
+    {
+    	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 0);   // bit5 = 1 → Y6 低
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    else if(G_DIO_MGR.x_state[5] == 0){
+    	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 0);   // bit5 = 0 → Y6 高
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+	}
+    if(G_DIO_MGR.x_state[11] == 1)
+    {
+    	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 1);   // bit5 = 1 → Y6 低
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    else if(G_DIO_MGR.x_state[5] == 0){
+    	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 1);   // bit5 = 0 → Y6 高
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+	}
+    if(G_DIO_MGR.x_state[12] == 1)
+    {
+    	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 2);   // bit5 = 1 → Y6 低
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    else if(G_DIO_MGR.x_state[5] == 0){
+    	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 2);   // bit5 = 0 → Y6 高
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+	}
+
     // 闪烁定时器ID数组
-    for(int i = 0; i < 5; i++) {
+    for(int i = 0; i < 6; i++) {
         if(G_DIO_MGR.y_blink_enable[i]) {
             if (G_DIO_MGR.y_blink_on[i]) {
                 // 点亮状态，判断是否到达熄灭时间
@@ -179,6 +214,108 @@ static void DRVMGR_DIO_DeviceOutControl(uint8_t device_num)
             }
         }
     }
+
+#endif
+ //   DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+
+#if 0
+    if( GPIO_ReadInputDataBit(GPIOD, GPIO_Pin_3) == 1){
+    	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 0);   // bit0 = 0 → Y1 高
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }else
+    {
+    	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 0);   // bit0 = 1 → Y1 低
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    if(GPIO_ReadInputDataBit(GPIOD, GPIO_Pin_4)==1){
+    	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 1);   // bit1 = 0 → Y2 高
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    else{
+    	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 1);   // bit1 = 1 → Y2 低
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    if(GPIO_ReadInputDataBit(GPIOD, GPIO_Pin_5)==1){
+    	G_DIO_MGR.OutPut_Data_Arrays	&= ~(1 << 2);   // bit2 = 0 → Y3 高
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    else {
+    	G_DIO_MGR.OutPut_Data_Arrays	|=  (1 << 2);   // bit2 = 1 → Y3 低
+    	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+    }
+    if(GPIO_ReadInputDataBit(GPIOD, GPIO_Pin_6)==1){
+     	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 3);   // bit0 = 0 → Y1 高
+     	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+     }else
+     {
+     	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 3);   // bit0 = 1 → Y1 低
+     	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+     }
+     if(GPIO_ReadInputDataBit(GPIOD, GPIO_Pin_7)==1){
+     	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 4);   // bit1 = 0 → Y2 高
+     	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+     }
+     else{
+     	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 4);   // bit1 = 1 → Y2 低
+     	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+     }
+     if(GPIO_ReadInputDataBit(GPIOG, GPIO_Pin_9)==1){
+     	G_DIO_MGR.OutPut_Data_Arrays	&= ~(1 << 5);   // bit2 = 0 → Y3 高
+     	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+     }
+     else {
+     	G_DIO_MGR.OutPut_Data_Arrays	|=  (1 << 5);   // bit2 = 1 → Y3 低
+     	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+     }
+     if(GPIO_ReadInputDataBit(GPIOG, GPIO_Pin_10)==1){
+      	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 6);   // bit0 = 0 → Y1 高
+      	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+      }else
+      {
+      	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 6);   // bit0 = 1 → Y1 低
+      	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+      }
+      if(GPIO_ReadInputDataBit(GPIOG, GPIO_Pin_11)==1 ){
+      	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 7);   // bit1 = 0 → Y2 高
+      	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+      }
+      else{
+      	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 7);   // bit1 = 1 → Y2 低
+      	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+      }
+      if(GPIO_ReadInputDataBit(GPIOG, GPIO_Pin_12)==1){
+      	G_DIO_MGR.OutPut_Data_Arrays	&= ~(1 << 0);   // bit2 = 0 → Y3 高
+      	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+      }
+      else {
+      	G_DIO_MGR.OutPut_Data_Arrays	|=  (1 << 0);   // bit2 = 1 → Y3 低
+      	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+      }
+      if(GPIO_ReadInputDataBit(GPIOG, GPIO_Pin_13)==1){
+       	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 1);   // bit0 = 0 → Y1 高
+       	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+       }else
+       {
+       	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 1);   // bit0 = 1 → Y1 低
+       	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+       }
+       if(GPIO_ReadInputDataBit(GPIOG, GPIO_Pin_14)==1 ){
+       	G_DIO_MGR.OutPut_Data_Arrays &= ~(1 << 2);   // bit1 = 0 → Y2 高
+       	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+       }
+       else{
+       	G_DIO_MGR.OutPut_Data_Arrays |=  (1 << 2);   // bit1 = 1 → Y2 低
+       	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+       }
+       if(GPIO_ReadInputDataBit(GPIOG, GPIO_Pin_15)==1){
+       	G_DIO_MGR.OutPut_Data_Arrays	&= ~(1 << 3);   // bit2 = 0 → Y3 高
+       	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+       }
+       else {
+       	G_DIO_MGR.OutPut_Data_Arrays	|=  (1 << 3);   // bit2 = 1 → Y3 低
+       	DRVMGR_DIO_DOSetBitsStatus(G_DIO_MGR.OutPut_Data_Arrays);
+       }
+#endif
 }
 void DRVMGR_DIOPutOut(void)
 {
@@ -463,6 +600,7 @@ void DRVMGR_DIO_DOSetBitsStatus(uint16_t bitsStatus)
 	GPIO_WriteBit(GPIOE, GPIO_Pin_4,  bitsValue.B5);  // DO0.5 --> Y6 --> PE4
 	GPIO_WriteBit(GPIOE, GPIO_Pin_5,  bitsValue.B6);  // DO0.6 --> Y7 --> PE5
 	GPIO_WriteBit(GPIOE, GPIO_Pin_6,  bitsValue.B7);  // DO0.7 --> Y8 --> PE6
+
 }
 
 
