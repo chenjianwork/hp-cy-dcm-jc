@@ -31,7 +31,7 @@
 #define CAN_ID_HOST_STATE   (0x00012080)  // 主机状态命令ID 
 #define CAN_ID_HOST_STATE2  (0x00016080)  // 2号泵主机状态命令ID
 #define CAN_ID_VFD_CONTROL  (0x00034080)  // 变频器控制命令ID
-#define CAN_ID_FIREALARM    (0x00034080)  // 火警报警命令ID
+#define CAN_ID_FIREALARM    (0x00024080)  // 火警报警命令ID	CC02
 
 // 实时数据CAN ID定义
 #define MODULE17_CAN_ID    (0x00022040)  // CC01协议模块
@@ -48,6 +48,10 @@
 #define MODULE20_CAN_ID	   (0x00028040)  // CC04协议模块 20
 #define MODULE20_DIGITAL_OUTPUT_CANID 	   (0x00028060)
 #define MODULE20_DIGITAL_INPUT_CANID    (0x00028020)
+
+
+#define CC01_Y1_CAN_ID	(0x0001a080)	//由PLC发送到CC01模块的Y1引脚的CANID
+#define CC01_Y2_Y3_CAN_ID	(0x00014060)	//由PLC发送到CC01模块的Y2引脚的CANID
 
 
 // 数据发送周期定义（单位：毫秒）
@@ -67,7 +71,6 @@
 * 类型定义
 ****************************************************************************************************
 */
-
 
 
 /*!
@@ -90,6 +93,7 @@ typedef enum {
 	DEVICE_MONITOR_Pressure2,            		// 压力传感器压力2
 	DEVICE_DI_Data,							//数字量输入
 	DEVICE_D0_Data,							//数字量输出
+	DEVICE_FIREALARM_Data,							//CC02 火警报警信息
 }DEVICE_SENDData;
 
 
@@ -101,6 +105,8 @@ struct _CAN_MGR {
 	uint8_t IsBackup_MODULE17;               // 备机状态，0:空闲，1:备机
 	uint8_t IsBackup_MODULE18;               // 备机状态，0:空闲，1:备机
 	uint8_t DEVICE_SENDData;		// 协议模块发送数据
+	uint8_t	cc01_CC02_Y1_Data_Rx;			// 接收cc01-CC02 Y1引脚的数据
+	uint8_t	cc01_CC02_Y2_Y3_Data_Rx;			// 接收cc01-CC02 Y2 Y3引脚的数据
 	// 实时数据
 	
 
@@ -123,6 +129,7 @@ struct _CAN_MGR {
 	struct _TIMER TmrBusSwitch;	// 总线切换超时检测定时器
 	struct _TIMER TmrOnlineFrame;	// 在线帧超时检测定时器
 	struct _TIMER TmrMonVal;		// 监控值（流量计、压力传感器、流量计数据）检测定时器
+
 };
 
 /*!
@@ -174,6 +181,11 @@ void COMMGR_CANInit(void)
 	G_CAN_MGR.Address = 1;
 	G_CAN_MGR.Vfd_Address = 1;
 	G_CAN_MGR.DEVICE_SENDData = DEVICE_MONITOR_ControlWord;
+	G_CAN_MGR.cc01_CC02_Y1_Data_Rx = 0;
+//	G_CAN_MGR.cc01_X_Data_Rx = 0;
+	G_CAN_MGR.cc01_CC02_Y2_Y3_Data_Rx = 0;
+//	G_CAN_MGR.cc02_X_Data_Rx = 0;
+
 	// 初始化ACK_can数组
 	G_CAN_MGR.ACK_can[0] = 0xaa;
 	G_CAN_MGR.ACK_can[1] = 0x00;
@@ -184,6 +196,7 @@ void COMMGR_CANInit(void)
 	G_CAN_MGR.ACK_can[6] = 0xc3;
 	G_CAN_MGR.ACK_can[7] = 0x33;
 	G_CAN_MGR.ProtocolModNumber = SYSMGR_Para_HwDevNum();
+
 	// 初始化状态超时检测定时器
 
 	DRVMGR_TimerStart(&G_CAN_MGR.TmrBackup, STATE_TIMEOUT_PERIOD);
@@ -267,6 +280,12 @@ void COMMGR_CANHandle(void)
 				}
 				break;
 
+			case CC01_Y1_CAN_ID:
+				G_CAN_MGR.cc01_CC02_Y1_Data_Rx = G_CAN_MGR.CANMsg.Body[4]>>1;
+			break;
+			case CC01_Y2_Y3_CAN_ID:
+				G_CAN_MGR.cc01_CC02_Y2_Y3_Data_Rx = G_CAN_MGR.CANMsg.Body[0]<<1;
+			break;
 			case CAN_ID_VFD_CONTROL:
 				// 处理变频器控制命令
 				{
@@ -325,9 +344,9 @@ void COMMGR_CANHandle(void)
 	}
 
 	// 处理实时数据发送
-	if (G_CAN_MGR.Online) {
+	//if (G_CAN_MGR.Online) {
 		COMMGR_CANMonValTxProcess(G_CAN_MGR.ProtocolModNumber);
-	}
+//	}
 }
 
 /*!
@@ -729,7 +748,15 @@ static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM){
 				G_CAN_MGR.DEVICE_SENDData = DEVICE_MONITOR_ControlWord;
 			}
 			break;
-
+#if 0
+		case DEVICE_FIREALARM_Data:	//CC02
+			if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrMonVal)){
+				DRVMGR_TimerStart(&G_CAN_MGR.TmrMonVal, SEND_PERIOD_MonVal);
+				COMMGR_CANSendFireAlarmData(CAN_ID_FIREALARM);
+				G_CAN_MGR.DEVICE_SENDData = DEVICE_MONITOR_ControlWord;
+			}
+			break;
+#endif
 		default:
 			  break;
 	}
@@ -765,19 +792,32 @@ static void COMMGR_CANSendFireAlarmData(uint32_t can_id)
     struct _CAN_MSG canmsg;
     uint16_t do_status;
 
-    do_status = DRVMGR_DIO_GetDOBits();
-    DRVMGR_DIO_DOSetBitsStatus(do_status);
-
-    //前两个字节有效，其余字节目前无效
-    for (int i = 0; i < 8; i++) {
-    	if(i>1){
-    		canmsg.Body[i] = 0;
-    	}
-    	else{
-    		canmsg.Body[i] = (do_status >> (i * 8)) & 0xFF; // 拆分为8字节
-    	}
+    do_status = 1;
+    //仅设备编号为CC02时，才发送数据
+    if(G_CAN_MGR.ProtocolModNumber == MODULE18_DEVNUM){
+		//前两个字节有效，其余字节目前无效
+		for (int i = 0; i < 8; i++) {
+			canmsg.Body[i] = (do_status >> (i * 8)) & 0xFF; // 拆分为8字节
+		}
+		canmsg.ID = can_id;
+		canmsg.Len = 8;
+		COMMGR_CANSendResponse(&canmsg);
     }
-    canmsg.ID = can_id;
-    canmsg.Len = 8;
-    COMMGR_CANSendResponse(&canmsg);
 }
+
+
+/*!
+****************************************************************************************************
+* 功能描述：获取当前CC01 Y 引脚状态
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数： 
+****************************************************************************************************
+*/
+uint8_t COMMGR_CANGetPLCToDeviceData(void)
+{
+	return ((G_CAN_MGR.cc01_CC02_Y1_Data_Rx | G_CAN_MGR.cc01_CC02_Y2_Y3_Data_Rx ) &0x1F);
+}
+
+

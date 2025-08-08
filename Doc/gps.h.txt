@@ -1,0 +1,459 @@
+/*!
+****************************************************************************************************
+* 文件名称：devmanager-gps.c
+* 功能简介：该文件是设备管理器组件GPS设备模块的实现源文件
+* 文件作者：卢冬冬
+* 创建日期：2024-05-30
+* 版权声明：All Rights Reserved.
+****************************************************************************************************
+*/
+#include <hqhp/defs.h>
+#include <hqhp/drvmanager.h>
+#include <hqhp/dbgmanager.h>
+#include <stdio.h>
+#include <string.h>
+#include <rtthread.h>
+#include <minux/completion.h>
+#include "minmea/minmea.h"
+#include "internal.h"
+
+#include <stdio.h>
+#include <time.h>
+
+/*!
+****************************************************************************************************
+* 常量定义
+****************************************************************************************************
+*/
+#define RX_BUF_SIZE (256)
+#define DBG_BUF_SIZE (256)
+
+#define GPS_DEFAULT_LON (104.0711) // 成都经度
+#define GPS_DEFAULT_LAT (30.6712)  // 成都纬度
+
+#if 1
+#define LOG_D(...)
+#else
+#define LOG_D(...)  DBGMGR_Print(__VA_ARGS__)
+#endif
+#define LOG_I(...)  DBGMGR_Print(__VA_ARGS__)
+#define LOG_W(...)  DBGMGR_Print(__VA_ARGS__)
+
+/*!
+****************************************************************************************************
+* 类型定义
+****************************************************************************************************
+*/
+struct _GPS_MGR {
+	bool Online;
+	bool FixValid;
+	bool TimeValid;
+	bool SpeedValid;
+	struct _GPS_INFO GPSInfo;
+	struct rt_mutex GPSInfoLock;
+
+	struct {
+		bool Done;
+		ssize_t Len;
+		uint8_t Buf[RX_BUF_SIZE + 1]; // 预留1个字节数据，用于填充'\0'
+	} Rx[8]; // 因GGA数据太过频繁，这里采用数组队列的方式，处理GPS数据，防止丢帧
+	
+	struct {
+		rt_tick_t GGA;
+		rt_tick_t RMC;
+		rt_tick_t ZDA;
+	} Time;
+};
+
+/*!
+****************************************************************************************************
+* 全局变量
+****************************************************************************************************
+*/
+static struct _GPS_MGR gGPSMGR;
+
+/*!
+****************************************************************************************************
+* 本地声明
+****************************************************************************************************
+*/
+static void DEVMGR_GPSRecvProcess(const char *message);
+static void DEVMGR_GPSRxByteCallback(int drvidx, uint8_t* data, size_t bytes);
+
+/*!
+****************************************************************************************************
+* 接口函数
+****************************************************************************************************
+*/
+/*!
+****************************************************************************************************
+* 功能描述：
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+void DEVMGR_GPSInit(void)
+{
+	int i;
+
+	gGPSMGR.Online	= 0;
+	gGPSMGR.FixValid = false;
+	gGPSMGR.TimeValid = false;
+	gGPSMGR.SpeedValid = false;
+	for (i = 0; i < ELEMENTS_OF(gGPSMGR.Rx); i++) {
+		gGPSMGR.Rx[i].Done = 0;
+		gGPSMGR.Rx[i].Len	= 0;
+	}
+
+	gGPSMGR.GPSInfo.Valid				  = false;
+	gGPSMGR.GPSInfo.Latitude			  = GPS_DEFAULT_LAT;
+	gGPSMGR.GPSInfo.Longitude			  = GPS_DEFAULT_LON;
+	gGPSMGR.GPSInfo.Speed				  = 0;
+	gGPSMGR.GPSInfo.Height				  = 0;
+	gGPSMGR.GPSInfo.Course				  = 0;
+	gGPSMGR.GPSInfo.Variation			  = 0;
+	gGPSMGR.GPSInfo.DateTime.Year		  = 2024;
+	gGPSMGR.GPSInfo.DateTime.Month		  = 1;
+	gGPSMGR.GPSInfo.DateTime.Day		  = 1;
+	gGPSMGR.GPSInfo.DateTime.Hours		  = 0;
+	gGPSMGR.GPSInfo.DateTime.Minutes	  = 0;
+	gGPSMGR.GPSInfo.DateTime.Seconds	  = 0;
+	gGPSMGR.GPSInfo.DateTime.Microseconds = 0;
+	gGPSMGR.Time.GGA = rt_tick_get();
+	gGPSMGR.Time.RMC = rt_tick_get();
+	gGPSMGR.Time.ZDA = rt_tick_get();
+	rt_mutex_init(&gGPSMGR.GPSInfoLock, "gps", RT_IPC_FLAG_FIFO);
+
+	// 初始化硬件
+	DRVMGR_UARTOpen(CONFIG_GPS_UART, CONFIG_GPS_UART_BARDRATE);
+	DRVMGR_UARTSetRxCallback(CONFIG_GPS_UART, DEVMGR_GPSRxByteCallback);
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+void DEVMGR_GPSHandle(void)
+{
+	int m;
+
+	for (m = 0; m < ELEMENTS_OF(gGPSMGR.Rx); m++) {
+		if (gGPSMGR.Rx[m].Done) {
+			// 解析接收到数据消息
+			DEVMGR_GPSRecvProcess((const char *)gGPSMGR.Rx[m].Buf);
+			// 清除接收完成标志
+			gGPSMGR.Rx[m].Done = 0;
+		}
+	}
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：
+* 注意事项：貌似GPS模块主动向MCU发送数据,不需要MCU主动发送数据给GPS
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+void DEVMGR_GPSPrint(const char* fmt, ...)
+{
+	va_list vaArg;
+	ssize_t chars;
+	static char strings[DBG_BUF_SIZE];
+
+	// 在上次发送完成前，不允许覆盖旧数据！！！
+	while (DRVMGR_UARTIsTxBusy(CONFIG_GPS_UART)) {
+		rt_thread_delay(1);
+	}
+
+	va_start(vaArg, fmt);
+	chars = rt_vsnprintf(strings, sizeof(strings) - 1, fmt, vaArg);
+	if (chars > (sizeof(strings) - 1)) {
+		chars = (sizeof(strings) - 1);
+	}
+	va_end(vaArg);
+
+	DRVMGR_UARTSendBytes(CONFIG_GPS_UART, (const uint8_t*)strings, chars);
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：该方法用于复位GPS
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+void DEVMGR_GPSReset(void)
+{
+	rt_mutex_take(&gGPSMGR.GPSInfoLock, RT_WAITING_FOREVER);
+	gGPSMGR.FixValid = false;
+	gGPSMGR.TimeValid = false;
+	gGPSMGR.SpeedValid = false;
+	gGPSMGR.GPSInfo.Valid = 0;
+	rt_mutex_release(&gGPSMGR.GPSInfoLock);
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：该方法用于获取GPS信息
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+void DEVMGR_GPSGetInfo(struct _GPS_INFO* info)
+{
+	if (gGPSMGR.FixValid && gGPSMGR.TimeValid && gGPSMGR.SpeedValid) {
+		gGPSMGR.GPSInfo.Valid = 1;
+	}
+	rt_mutex_take(&gGPSMGR.GPSInfoLock, RT_WAITING_FOREVER);
+	memcpy(info, &gGPSMGR.GPSInfo, sizeof(struct _GPS_INFO));
+	rt_mutex_release(&gGPSMGR.GPSInfoLock);
+}
+
+/*!
+****************************************************************************************************
+* 本地函数
+****************************************************************************************************
+*/
+/*!
+****************************************************************************************************
+* 功能描述：该方法用于将卫星日期时间转为北京日期时间(+8小时)
+* 注意事项：NA
+* 输入参数：dt-时间结构体指针
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+void DEVMGR_UTCToBeijing(struct datetime *dt)
+{
+	struct tm utc;
+	struct tm *bjtime;
+	time_t now;
+
+	if ((dt->Year < 1900) && (dt->Mon < 1)) {
+		return;
+	}
+
+	memset(&utc, 0, sizeof(utc));
+	utc.tm_year = dt->Year - 1900; // 年份从1900年开始
+	utc.tm_mon  = dt->Mon - 1;     // 月份从0开始
+	utc.tm_mday = dt->Day;         // 日
+	utc.tm_hour = dt->Hour;        // 时
+	utc.tm_min  = dt->Min;         // 分
+	utc.tm_sec  = dt->Sec;         // 秒
+
+	// 将日期时间转换为时间戳
+	now = mktime(&utc);
+	// 与北京时间相差8小时
+	now += (8 * 3600);
+
+	// 将时间戳转换为日期时间
+	bjtime = gmtime(&now);
+	dt->Year = bjtime->tm_year + 1900; // 年份从1900年开始
+	dt->Mon  = bjtime->tm_mon + 1;     // 月份从0开始
+	dt->Day  = bjtime->tm_mday;        // 日
+	dt->Hour = bjtime->tm_hour;        // 时
+	dt->Min  = bjtime->tm_min;         // 分
+	dt->Sec  = bjtime->tm_sec;         // 秒
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+static void DEVMGR_GPSRecvProcess(const char *message)
+{
+	struct _GPS_INFO* pGPSInfo = &gGPSMGR.GPSInfo;
+
+	// 以下为整帧数据有效(已对帧头$,校验,以及尾部回车换行,以及标识符做判断)
+	switch (minmea_sentence_id(message, true)) {
+	case MINMEA_SENTENCE_RMC: {
+		struct minmea_sentence_rmc frame;
+
+		if (!minmea_parse_rmc(&frame, message)) {
+			LOG_W("$BDRMC sentence parse failed.\n");
+		} else {
+			rt_mutex_take(&gGPSMGR.GPSInfoLock, RT_WAITING_FOREVER);
+			gGPSMGR.Online	= true;
+			gGPSMGR.SpeedValid = frame.valid;
+			if (frame.valid) { //定位有效时
+				minmea_tocoord(&frame.latitude, &gGPSMGR.GPSInfo.Latitude);	  // 纬度
+				minmea_tocoord(&frame.longitude, &gGPSMGR.GPSInfo.Longitude); // 经度
+				minmea_tofloat(&frame.speed, &gGPSMGR.GPSInfo.Speed);		  // 速度,单位节(1节=1.852km/h)
+				minmea_tocoord(&frame.course, &gGPSMGR.GPSInfo.Course);		  // 航向角
+				minmea_tocoord(&frame.variation, &gGPSMGR.GPSInfo.Variation); // 磁偏角
+			}
+			rt_mutex_release(&gGPSMGR.GPSInfoLock);
+		}
+		
+		// 每秒打印一次，避免太频繁
+		if (time_after(rt_tick_get(), gGPSMGR.Time.GGA + 1000)) {
+			gGPSMGR.Time.GGA = rt_tick_get();
+			LOG_I("%s\n", message);
+		}
+	} break;
+
+	case MINMEA_SENTENCE_TXT: {
+		char type[6];
+		char state[16]; // 最长为"ANTENNA SHORT"共13个字符
+		memset(state, 0, sizeof(state));
+		// 语句格式为$GPTXT,01,01,01,ANTENNA OPEN*25
+		if (minmea_scan(message, "t___s", type, state)) {
+			if (!strcmp(type + 2, "TXT")) {
+				LOG_D("GPS: %s\n", state);
+			}
+		}
+	} break;
+
+	case MINMEA_SENTENCE_ZDA: {
+		struct minmea_sentence_zda frame;
+		struct datetime dt;
+
+		if (!minmea_parse_zda(&frame, message)) {
+			LOG_W("$BDZDA sentence parse failed.\n");
+		} else {
+			IO_BIT08 bits;
+			rt_mutex_take(&gGPSMGR.GPSInfoLock, RT_WAITING_FOREVER);
+			gGPSMGR.Online = true;
+
+			// ZDA输出有三种情况：
+			// A. 00000000 -1:-1:-1
+			// B. 00000000 03:23:48
+			// C. 20241009 03:23:48
+			// 只有情况C有效，所以进行判断
+			bits.Value = 0xFF;
+			bits.B0 = frame.date.year > 0;
+			bits.B1 = frame.date.month >= 0;
+			bits.B2 = frame.date.day >= 0;
+			bits.B3 = frame.time.hours >= 0;
+			bits.B4 = frame.time.minutes >= 0;
+			bits.B5 = frame.time.seconds >= 0;
+			if (bits.Value == 0xFF) {
+				gGPSMGR.TimeValid				= true;
+				pGPSInfo->DateTime.Year			= frame.date.year;
+				pGPSInfo->DateTime.Month		= frame.date.month;
+				pGPSInfo->DateTime.Day			= frame.date.day;
+				pGPSInfo->DateTime.Hours		= frame.time.hours;
+				pGPSInfo->DateTime.Minutes		= frame.time.minutes;
+				pGPSInfo->DateTime.Seconds		= frame.time.seconds;
+				pGPSInfo->DateTime.Microseconds = frame.time.microseconds;
+				dt.Year = frame.date.year;
+				dt.Mon  = frame.date.month;
+				dt.Day  = frame.date.day;
+				dt.Hour = frame.time.hours;
+				dt.Min  = frame.time.minutes;
+				dt.Sec  = frame.time.seconds;
+				// 将UTC日期时间转换为北京日期时间
+				DEVMGR_UTCToBeijing(&dt);
+				// 同步日期时间
+				DRVMGR_RTCSetDateTime(&dt);
+			}
+			rt_mutex_release(&gGPSMGR.GPSInfoLock);
+		}
+		
+		// 每秒打印一次，避免太频繁
+		if (time_after(rt_tick_get(), gGPSMGR.Time.ZDA + 1000)) {
+			gGPSMGR.Time.ZDA = rt_tick_get();
+			LOG_I("%s\n", message);
+		}
+	} break;
+
+	case MINMEA_SENTENCE_GGA: {
+		struct minmea_sentence_gga frame;
+
+		if (!minmea_parse_gga(&frame, message)) {
+			LOG_W("$BDGGA sentence parse failed.\n");
+		} else {
+			rt_mutex_take(&gGPSMGR.GPSInfoLock, RT_WAITING_FOREVER);
+			gGPSMGR.Online = true;
+			gGPSMGR.FixValid = frame.fix_quality > 0 ? true : false;
+			if (gGPSMGR.FixValid) {
+				minmea_tocoord(&frame.latitude,  &gGPSMGR.GPSInfo.Latitude);  // 纬度
+				minmea_tocoord(&frame.longitude, &gGPSMGR.GPSInfo.Longitude); // 经度
+				minmea_tocoord(&frame.altitude,  &gGPSMGR.GPSInfo.Height);	  // 高度,单位米
+			}
+			rt_mutex_release(&gGPSMGR.GPSInfoLock);
+		}
+		// 每秒打印一次，避免太频繁
+		if (time_after(rt_tick_get(), gGPSMGR.Time.GGA + 1000)) {
+			gGPSMGR.Time.GGA = rt_tick_get();
+			LOG_I("%s\n", message);
+		}
+	}
+	break;
+
+	case MINMEA_INVALID:
+	case MINMEA_UNKNOWN:
+	case MINMEA_SENTENCE_GSA:
+	case MINMEA_SENTENCE_GLL:
+	case MINMEA_SENTENCE_GST:
+	case MINMEA_SENTENCE_GSV:
+	case MINMEA_SENTENCE_GBS:
+	case MINMEA_SENTENCE_VTG:
+	default:
+		break;
+	}
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+static void DEVMGR_GPSRxByteCallback(int drvidx, uint8_t* data, size_t bytes)
+{
+	int m;
+	size_t i;
+
+	for (m = 0; m < ELEMENTS_OF(gGPSMGR.Rx); m++) {
+		if (!gGPSMGR.Rx[m].Done) {
+			break;;
+		}
+	}
+
+	// 当前正在处理上次接收到的数据，直接返回
+	if (m >= ELEMENTS_OF(gGPSMGR.Rx)) {
+		return;
+	}
+
+	for (i = 0; i < bytes; i++) {
+		// 根据当前字符进行解析
+		switch (data[i]) {
+		case '$':
+			gGPSMGR.Rx[m].Len				    = 0;
+			gGPSMGR.Rx[m].Buf[gGPSMGR.Rx[m].Len++] = data[i];
+			break;
+		case '\r':
+		case '\n':  //特别说明:此处接收数据只判是否尾部有回车换行,并未做整帧数据有效性判断(比如校验)
+			gGPSMGR.Rx[m].Done = 1;
+			gGPSMGR.Rx[m].Buf[gGPSMGR.Rx[m].Len] = '\0';
+			break;
+		default:
+			if (gGPSMGR.Rx[m].Len < RX_BUF_SIZE) {
+				gGPSMGR.Rx[m].Buf[gGPSMGR.Rx[m].Len++] = data[i];
+			}
+			break;
+		}
+	}
+}

@@ -30,6 +30,19 @@
 ****************************************************************************************************
 */
 
+struct _DIO_MGR {
+
+	uint8_t ProtocolModNumber;		// 协议模块编号
+	uint8_t	Y_Data_Rx;			// 接收cc01 cc02 Y引脚的数据
+
+};
+
+/*!
+****************************************************************************************************
+* 全局变量
+****************************************************************************************************
+*/
+static struct _DIO_MGR G_DIO_MGR;
 
 /*!
 ****************************************************************************************************
@@ -55,6 +68,11 @@ static void DRVMGR_DIOHwPinInit(void);
 void DRVMGR_DIOInit(void)
 {
 	DRVMGR_DIOHwPinInit();
+	G_DIO_MGR.ProtocolModNumber = SYSMGR_Para_HwDevNum();
+	G_DIO_MGR.Y_Data_Rx = 0;
+//	G_DIO_MGR.cc01_X_Data_Rx = 0;
+//	G_DIO_MGR.cc02_Y_Data_Rx = 0;
+//	G_DIO_MGR.cc02_X_Data_Rx = 0;
 }
 
 /*!
@@ -412,6 +430,10 @@ uint16_t DRVMGR_DIO_GetDOBits(void)
     uint8_t x1_state = (all_di_status & 0x0001) ? 1 : 0;  // 获取X1状态
     uint8_t x2_state = (all_di_status & 0x0002) ? 1 : 0;  // 获取X2状态
 
+	G_DIO_MGR.Y_Data_Rx = COMMGR_CANGetPLCToDeviceData();
+
+	
+
     // 根据运行状态设置输出
     if (runState == RUNSTATE_RUNNING) {
         // 运行状态下，Y4和Y5为高电平（冷却风机开启）
@@ -436,5 +458,9 @@ uint16_t DRVMGR_DIO_GetDOBits(void)
     if (x1_state == 1 || x2_state == 1){
     	SYSMGR_SetRunState(RUNSTATE_IDLE);
     }
+	// |上来自PLC发送的Y状态
+
+    bitsStatus = bitsStatus | G_DIO_MGR.Y_Data_Rx;
+
     return bitsStatus;
 }

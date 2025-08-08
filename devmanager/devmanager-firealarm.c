@@ -1,8 +1,8 @@
 /*!
 ****************************************************************************************************
 * 文件名称：devmanager-firealarm.c
-* 功能简介：火警报警器管理模块
-* 文件作者：Haotian
+* 功能简介：火警报警器管理模块（优化版）
+* 文件作者：Haotian（优化：小丽）
 * 创建日期：2020-09-17
 * 版权声明：All Rights Reserved.
 ****************************************************************************************************
@@ -11,6 +11,8 @@
 #include <hqhp/config.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <ctype.h>
 #include <hqhp/errmanager.h>
 #include <hqhp/drvmanager.h>
 #include "commanager/commanager.h"
@@ -34,24 +36,42 @@
 #define FIREALARM_MAX_SENTENCE_LEN 128 // 最大语句长度
 #define FIREALARM_MIN_SENTENCE_LEN 20  // 最小语句长度
 
-// 消息类型定义 (注1)
+// 消息类型定义
 #define MSG_TYPE_STATUS     'S'     // 状态信息
 #define MSG_TYPE_EVENT      'E'     // 事件状态
 #define MSG_TYPE_FAULT      'F'     // 系统故障
 #define MSG_TYPE_DISABLE    'D'     // 屏蔽
 
-// 条件状态定义 (注7)
+// 条件状态定义
 #define CONDITION_ACTIVATED 'A'     // 激活
 #define CONDITION_DEACTIVATED 'V'   // 不激活
 #define CONDITION_UNKNOWN   'X'     // 状态未知
 
-// 确认状态定义 (注8)
+// 确认状态定义
 #define ACK_CONFIRMED       'A'     // 确认
 #define ACK_UNCONFIRMED     'V'     // 未确认
 
 // 定时器相关常量
 #define FIREALARM_LINK_TIMEOUT      (5000)  // 链路连接超时时间，单位毫秒
 #define FIREALARM_RX_TIMEOUT        (100)   // 接收超时，单位毫秒
+
+// 安全字符串复制
+#define SAFE_STRCPY(dest, src, size) do { \
+    if (src) snprintf(dest, size, "%s", src); \
+    else dest[0] = '\0'; \
+} while(0)
+
+// 十六进制字符转整数函数
+static int hex2int(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    return -1;
+}
 
 /*!
 ****************************************************************************************************
@@ -74,7 +94,7 @@ typedef struct {
     char deviceType[3];        // 探测器/控制器类型 (2字符)
     char zone1[3];             // 第一分区指示 (2字符)
     char zone2[4];             // 第二分区指示 (3字符)
-    char detectorAddr[4];      // 火灾探测器地址或激活的探测事项计数 (3字符)
+    char detectorAddr[4];      // 探测器地址或计数 (3字符)
     char condition;            // 条件 (A/V/X)
     char ackStatus;            // 报警确认状态 (A/V)
     char description[64];      // 信息描述字符串
@@ -82,20 +102,17 @@ typedef struct {
 
 // 火警报警器管理结构体
 struct _FIREALARM_MGR {
-    // 通信相关
     struct {
         uint8_t  buffer[FIREALARM_MAX_SENTENCE_LEN];  // 接收缓存
         uint16_t bytes;                               // 接收字节数
         uint8_t  refresh;                             // 接收刷新标志
         FIREALARM_EVENT lastEvent;                    // 最后接收的事件
     } Rx;
-    
-    // 状态相关
+
     uint8_t isOnline;           // 火警报警器是否在线
     uint8_t hasNewEvent;        // 是否有新事件
     uint8_t alarmCount;         // 当前激活的报警数量
-    
-    // 定时器
+
     struct _TIMER linkTimer;    // 链路超时定时器
     struct _TIMER rxTimer;      // 接收超时定时器
 };
@@ -114,10 +131,16 @@ static struct _FIREALARM_MGR gFIREALARM_MGR;
 */
 static void DEVMGR_FireAlarmRxByteCallback(int idx, uint8_t data);
 static void DEVMGR_FireAlarmRxProcess(void);
-static uint8_t DEVMGR_FireAlarmCalculateChecksum(const uint8_t* data, uint16_t len);
+static uint8_t DEVMGR_FireAlarmCalculateChecksum(const char* start, const char* end);
+static uint8_t DEVMGR_FireAlarmMinmeaChecksum(const char* sentence);
+static bool DEVMGR_FireAlarmMinmeaCheck(const char* sentence, bool strict);
 static bool DEVMGR_FireAlarmParseNMEASentence(const uint8_t* data, uint16_t len, FIREALARM_EVENT* event);
 static void DEVMGR_FireAlarmSetOnline(void);
 static void DEVMGR_FireAlarmSetOffline(void);
+static void DEVMGR_FireAlarmHandleStatus(const FIREALARM_EVENT* event);
+static void DEVMGR_FireAlarmHandleEvent(const FIREALARM_EVENT* event);
+static void DEVMGR_FireAlarmHandleFault(const FIREALARM_EVENT* event);
+static void DEVMGR_FireAlarmHandleDisable(const FIREALARM_EVENT* event);
 static const char* DEVMGR_FireAlarmGetDeviceTypeName(const char* typeCode);
 
 /*!
@@ -126,126 +149,56 @@ static const char* DEVMGR_FireAlarmGetDeviceTypeName(const char* typeCode);
 ****************************************************************************************************
 */
 
-/*!
-****************************************************************************************************
-* 功能描述：初始化火警报警器模块
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：NA
-****************************************************************************************************
-*/
 void DEVMGR_FireAlarmInit(void)
 {
-    // 初始化管理结构体
     memset(&gFIREALARM_MGR, 0, sizeof(gFIREALARM_MGR));
-    
-    // 初始化UART通信
+
     DRVMGR_UARTOpen(CONFIG_UART_FIREALARM, CONFIG_UART_FIREALARM_BAUD, CONFIG_UART_FIREALARM_PARITY);
     DRVMGR_UARTSetRxCallback(CONFIG_UART_FIREALARM, DEVMGR_FireAlarmRxByteCallback);
-    
-    // 启动链路超时定时器
+
     DRVMGR_TimerStart(&gFIREALARM_MGR.linkTimer, FIREALARM_LINK_TIMEOUT);
-    
-    // 设置火警报警器离线状态
+
     DEVMGR_FireAlarmSetOffline();
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：火警报警器模块周期处理函数
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：NA
-****************************************************************************************************
-*/
 void DEVMGR_FireAlarmHandle(void)
 {
-    // 检查接收超时
     if (DRVMGR_TimerIsExpiration(&gFIREALARM_MGR.rxTimer)) {
         DRVMGR_TimerCancel(&gFIREALARM_MGR.rxTimer);
-        gFIREALARM_MGR.Rx.bytes = 0; // 清除接收缓存
+        gFIREALARM_MGR.Rx.bytes = 0;
     }
-    
-    // 处理新接收的事件
+
     if (gFIREALARM_MGR.Rx.refresh) {
         DEVMGR_FireAlarmRxProcess();
         gFIREALARM_MGR.Rx.refresh = false;
     }
-    
-    // 检查链路超时
+
     if (DRVMGR_TimerIsExpiration(&gFIREALARM_MGR.linkTimer)) {
         DRVMGR_TimerStart(&gFIREALARM_MGR.linkTimer, FIREALARM_LINK_TIMEOUT);
         DEVMGR_FireAlarmSetOffline();
     }
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：查询火警报警器是否在线
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：true 在线；false 离线
-****************************************************************************************************
-*/
 bool DEVMGR_FireAlarmIsOnline(void)
 {
     return gFIREALARM_MGR.isOnline;
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：查询是否有新的火警事件
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：true 有新事件；false 无新事件
-****************************************************************************************************
-*/
 bool DEVMGR_FireAlarmHasNewEvent(void)
 {
     return gFIREALARM_MGR.hasNewEvent;
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：清除火警事件刷新标志
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：NA
-****************************************************************************************************
-*/
 void DEVMGR_FireAlarmClearEventFlag(void)
 {
     gFIREALARM_MGR.hasNewEvent = false;
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：获取当前激活的报警数量
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：激活的报警数量
-****************************************************************************************************
-*/
 uint8_t DEVMGR_FireAlarmGetAlarmCount(void)
 {
     return gFIREALARM_MGR.alarmCount;
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：获取最后接收的火警事件
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：event -- 火警事件信息
-* 返回参数：NA
-****************************************************************************************************
-*/
 void DEVMGR_FireAlarmGetLastEvent(FIREALARM_EVENT* event)
 {
     if (event != NULL) {
@@ -259,296 +212,236 @@ void DEVMGR_FireAlarmGetLastEvent(FIREALARM_EVENT* event)
 ****************************************************************************************************
 */
 
-/*!
-****************************************************************************************************
-* 功能描述：火警报警器串口接收回调函数
-* 注意事项：NA
-* 输入参数：idx -- 串口索引
-*          data -- 接收到的字节数据
-* 输出参数：NA
-* 返回参数：NA
-****************************************************************************************************
-*/
 static void DEVMGR_FireAlarmRxByteCallback(int idx, uint8_t data)
 {
-    // 重启接收超时定时器
-    DRVMGR_TimerStart(&gFIREALARM_MGR.rxTimer, FIREALARM_RX_TIMEOUT);
-    
-    // 检查缓存是否已满
-    if (gFIREALARM_MGR.Rx.bytes >= FIREALARM_MAX_SENTENCE_LEN) {
-        gFIREALARM_MGR.Rx.bytes = 0; // 重置接收
+    // 检查是否是报文起始符
+    if (data == NMEA_START_CHAR) {
+        // 重新开始接收
+        gFIREALARM_MGR.Rx.bytes = 0;
+        gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes++] = data;
+        DRVMGR_TimerStart(&gFIREALARM_MGR.rxTimer, FIREALARM_RX_TIMEOUT);
+        return;
     }
-    
-    // 存储接收到的字节
-    gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes++] = data;
-    
-    // 检查是否接收到完整的NMEA语句 (以CR+LF结尾)
-    if (gFIREALARM_MGR.Rx.bytes >= 2) {
-        if (gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes - 2] == NMEA_END_CHAR1 &&
-            gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes - 1] == NMEA_END_CHAR2) {
-            
-            // 停止接收超时定时器
-            DRVMGR_TimerCancel(&gFIREALARM_MGR.rxTimer);
-            
-            // 设置接收刷新标志
-            if (!gFIREALARM_MGR.Rx.refresh) {
-                gFIREALARM_MGR.Rx.refresh = true;
-            }
+
+    // 如果还没有检测到报文起始符，则直接丢弃
+    if (gFIREALARM_MGR.Rx.bytes == 0) {
+        return;
+    }
+
+    // 存储数据
+    if (gFIREALARM_MGR.Rx.bytes < FIREALARM_MAX_SENTENCE_LEN) {
+        gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes++] = data;
+    } else {
+        // 缓存溢出，丢弃报文
+        gFIREALARM_MGR.Rx.bytes = 0;
+        return;
+    }
+
+    // 检查是否接收到 \r\n
+    if (gFIREALARM_MGR.Rx.bytes >= 2 &&
+        gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes-2] == NMEA_END_CHAR1 &&
+        gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes-1] == NMEA_END_CHAR2) {
+
+        // 停止超时定时器
+        DRVMGR_TimerCancel(&gFIREALARM_MGR.rxTimer);
+
+        // 在结尾加 '\0' 方便字符串处理
+        if (gFIREALARM_MGR.Rx.bytes < FIREALARM_MAX_SENTENCE_LEN) {
+            gFIREALARM_MGR.Rx.buffer[gFIREALARM_MGR.Rx.bytes] = '\0';
+        }
+        // 使用minmea风格的校验方式
+        char *sentence = (char*)gFIREALARM_MGR.Rx.buffer;
+        if (DEVMGR_FireAlarmMinmeaCheck(sentence, true)) {
+            gFIREALARM_MGR.Rx.refresh = true;       // 校验成功
         }
     }
+
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：处理接收到的火警报警器数据
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：NA
-****************************************************************************************************
-*/
 static void DEVMGR_FireAlarmRxProcess(void)
 {
     FIREALARM_EVENT event;
-    
-    // 解析NMEA语句
     if (DEVMGR_FireAlarmParseNMEASentence(gFIREALARM_MGR.Rx.buffer, gFIREALARM_MGR.Rx.bytes, &event)) {
-        // 更新火警报警器在线状态
         DEVMGR_FireAlarmSetOnline();
-        
-        // 保存事件信息
         memcpy(&gFIREALARM_MGR.Rx.lastEvent, &event, sizeof(FIREALARM_EVENT));
-        
-        // 根据消息类型处理
+
         switch (event.msgType) {
-            case MSG_TYPE_STATUS:
-                // 状态信息，更新报警数量
-                gFIREALARM_MGR.alarmCount = atoi(event.detectorAddr);
-                break;
-                
-            case MSG_TYPE_EVENT:
-                // 事件状态，设置新事件标志
-                gFIREALARM_MGR.hasNewEvent = true;
-                if (event.condition == CONDITION_ACTIVATED) {
-                    // 报警激活，可以在这里添加报警处理逻辑
-                }
-                break;
-                
-            case MSG_TYPE_FAULT:
-                // 系统故障，可以在这里添加故障处理逻辑
-                break;
-                
-            case MSG_TYPE_DISABLE:
-                // 屏蔽状态，可以在这里添加屏蔽处理逻辑
-                break;
+            case MSG_TYPE_STATUS:  DEVMGR_FireAlarmHandleStatus(&event);  break;
+            case MSG_TYPE_EVENT:   DEVMGR_FireAlarmHandleEvent(&event);   break;
+            case MSG_TYPE_FAULT:   DEVMGR_FireAlarmHandleFault(&event);   break;
+            case MSG_TYPE_DISABLE: DEVMGR_FireAlarmHandleDisable(&event); break;
         }
     }
-    
-    // 清除接收缓存
     gFIREALARM_MGR.Rx.bytes = 0;
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：计算NMEA语句的校验和
-* 注意事项：NA
-* 输入参数：data -- 数据指针
-*          len -- 数据长度
-* 输出参数：NA
-* 返回参数：校验和值
-****************************************************************************************************
-*/
-static uint8_t DEVMGR_FireAlarmCalculateChecksum(const uint8_t* data, uint16_t len)
+static uint8_t DEVMGR_FireAlarmCalculateChecksum(const char* start, const char* end)
 {
     uint8_t checksum = 0;
-    uint16_t i;
-    
-    for (i = 0; i < len; i++) {
-        checksum ^= data[i];
+    for (const char* p = start; p < end; p++) {
+        checksum ^= (uint8_t)(*p);
     }
-    
     return checksum;
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：解析NMEA语句
-* 注意事项：NA
-* 输入参数：data -- 接收到的数据
-*          len -- 数据长度
-* 输出参数：event -- 解析出的事件信息
-* 返回参数：true 解析成功；false 解析失败
-****************************************************************************************************
-*/
-static bool DEVMGR_FireAlarmParseNMEASentence(const uint8_t* data, uint16_t len, FIREALARM_EVENT* event)
+// minmea风格的校验和计算函数
+static uint8_t DEVMGR_FireAlarmMinmeaChecksum(const char* sentence)
 {
-    char sentence[FIREALARM_MAX_SENTENCE_LEN];
-    char* token;
-    char* checksumPos;
-    uint8_t calculatedChecksum;
-    uint8_t receivedChecksum;
-    
-    if (len < FIREALARM_MIN_SENTENCE_LEN || event == NULL) {
+    // 支持带或不带起始美元符号的语句
+    if (*sentence == '$')
+        sentence++;
+
+    uint8_t checksum = 0x00;
+
+    // 可选的校验和是"$"和"*"之间所有字节的异或
+    while (*sentence && *sentence != '*') 
+        checksum ^= *sentence++;
+
+    return checksum;
+}
+
+// minmea风格的NMEA语句校验函数
+static bool DEVMGR_FireAlarmMinmeaCheck(const char* sentence, bool strict)
+{
+    uint8_t checksum = 0x00;
+
+    // 有效语句以"$"开头
+    if (*sentence++ != '$')
+        return false;
+
+    // 可选的校验和是"$"和"*"之间所有字节的异或
+    while (*sentence && *sentence != '*' && isprint((unsigned char)*sentence))
+        checksum ^= *sentence++;
+
+    // 如果存在校验和...
+    if (*sentence == '*') {
+        // 提取校验和
+        sentence++;
+        int upper = hex2int(*sentence++);
+        if (upper == -1)
+            return false;
+        int lower = hex2int(*sentence++);
+        if (lower == -1)
+            return false;
+        int expected = upper << 4 | lower;
+
+        // 检查校验和不匹配
+        if (checksum != expected)
+            return false;
+    } else if (strict) {
+        // 在严格模式下丢弃未校验的帧
         return false;
     }
-    
-    // 复制数据到字符串
-    memcpy(sentence, data, len);
-    sentence[len] = '\0';
-    
-    // 检查语句起始字符
-    if (sentence[0] != NMEA_START_CHAR) {
+
+    // 此时只允许换行符
+    while (*sentence == '\r' || *sentence == '\n') {
+        sentence++;
+    }
+
+    if (*sentence) {
         return false;
     }
-    
-    // 查找校验和位置
-    checksumPos = strchr(sentence, NMEA_CHECKSUM_CHAR);
-    if (checksumPos == NULL) {
-        return false;
-    }
-    
-    // 验证校验和
-    *checksumPos = '\0'; // 临时结束字符串
-    calculatedChecksum = DEVMGR_FireAlarmCalculateChecksum((uint8_t*)(sentence + 1), strlen(sentence + 1));
-    receivedChecksum = (uint8_t)strtol(checksumPos + 1, NULL, 16);
-    
-    if (calculatedChecksum != receivedChecksum) {
-        return false;
-    }
-    
-    // 检查语句标识
-    token = strtok(sentence + 1, ",");
-    if (token == NULL || strcmp(token, FIREALARM_SENTENCE_ID) != 0) {
-        return false;
-    }
-    
-    // 解析消息类型
-    token = strtok(NULL, ",");
-    if (token == NULL || strlen(token) != 1) {
-        return false;
-    }
-    event->msgType = token[0];
-    
-    // 解析事件时间
-    token = strtok(NULL, ",");
-    if (token != NULL && strlen(token) >= 8) {
-        event->eventTime.hour = (token[0] - '0') * 10 + (token[1] - '0');
-        event->eventTime.minute = (token[2] - '0') * 10 + (token[3] - '0');
-        event->eventTime.second = (token[4] - '0') * 10 + (token[5] - '0');
-        event->eventTime.centisec = (token[7] - '0') * 10 + (token[8] - '0');
-    }
-    
-    // 解析设备类型
-    token = strtok(NULL, ",");
-    if (token != NULL) {
-        strncpy(event->deviceType, token, sizeof(event->deviceType) - 1);
-        event->deviceType[sizeof(event->deviceType) - 1] = '\0';
-    }
-    
-    // 解析第一分区指示
-    token = strtok(NULL, ",");
-    if (token != NULL) {
-        strncpy(event->zone1, token, sizeof(event->zone1) - 1);
-        event->zone1[sizeof(event->zone1) - 1] = '\0';
-    }
-    
-    // 解析第二分区指示
-    token = strtok(NULL, ",");
-    if (token != NULL) {
-        strncpy(event->zone2, token, sizeof(event->zone2) - 1);
-        event->zone2[sizeof(event->zone2) - 1] = '\0';
-    }
-    
-    // 解析探测器地址
-    token = strtok(NULL, ",");
-    if (token != NULL) {
-        strncpy(event->detectorAddr, token, sizeof(event->detectorAddr) - 1);
-        event->detectorAddr[sizeof(event->detectorAddr) - 1] = '\0';
-    }
-    
-    // 解析条件
-    token = strtok(NULL, ",");
-    if (token != NULL && strlen(token) == 1) {
-        event->condition = token[0];
-    }
-    
-    // 解析确认状态
-    token = strtok(NULL, ",");
-    if (token != NULL && strlen(token) == 1) {
-        event->ackStatus = token[0];
-    }
-    
-    // 解析描述信息
-    token = strtok(NULL, ",");
-    if (token != NULL) {
-        strncpy(event->description, token, sizeof(event->description) - 1);
-        event->description[sizeof(event->description) - 1] = '\0';
-    }
-    
+
     return true;
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：设置火警报警器在线状态
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：NA
-****************************************************************************************************
-*/
+static bool DEVMGR_FireAlarmParseNMEASentence(const uint8_t* data, uint16_t len, FIREALARM_EVENT* event)
+{
+    if (len < FIREALARM_MIN_SENTENCE_LEN || !event) return false;
+
+    char sentence[FIREALARM_MAX_SENTENCE_LEN+1];
+    memcpy(sentence, data, len);
+    sentence[len] = '\0';
+
+    if (sentence[0] != NMEA_START_CHAR) return false;
+
+    // 使用minmea风格的校验方式
+    if (!DEVMGR_FireAlarmMinmeaCheck(sentence, true)) return false;
+
+    char *saveptr;
+    char *token = strtok_r(sentence+1, ",", &saveptr);
+    if (!token || strcmp(token, FIREALARM_SENTENCE_ID) != 0) return false;
+
+    token = strtok_r(NULL, ",", &saveptr);
+    event->msgType = (token && strlen(token)==1) ? token[0] : '?';
+
+    token = strtok_r(NULL, ",", &saveptr);
+    memset(&event->eventTime, 0, sizeof(event->eventTime));
+    if (token && strlen(token) >= 6) {
+        event->eventTime.hour   = (token[0]-'0')*10 + (token[1]-'0');
+        event->eventTime.minute = (token[2]-'0')*10 + (token[3]-'0');
+        event->eventTime.second = (token[4]-'0')*10 + (token[5]-'0');
+        if (strlen(token) >= 9) event->eventTime.centisec = (token[7]-'0')*10 + (token[8]-'0');
+    }
+
+    SAFE_STRCPY(event->deviceType,   strtok_r(NULL,",",&saveptr), sizeof(event->deviceType));
+    SAFE_STRCPY(event->zone1,        strtok_r(NULL,",",&saveptr), sizeof(event->zone1));
+    SAFE_STRCPY(event->zone2,        strtok_r(NULL,",",&saveptr), sizeof(event->zone2));
+    SAFE_STRCPY(event->detectorAddr, strtok_r(NULL,",",&saveptr), sizeof(event->detectorAddr));
+
+    token = strtok_r(NULL,",",&saveptr);
+    event->condition = (token && strlen(token)==1) ? token[0] : CONDITION_UNKNOWN;
+
+    token = strtok_r(NULL,",",&saveptr);
+    event->ackStatus = (token && strlen(token)==1) ? token[0] : ACK_UNCONFIRMED;
+
+    SAFE_STRCPY(event->description, strtok_r(NULL,",",&saveptr), sizeof(event->description));
+
+    return true;
+}
+
+static void DEVMGR_FireAlarmHandleStatus(const FIREALARM_EVENT* event)
+{
+    gFIREALARM_MGR.alarmCount = atoi(event->detectorAddr);
+}
+
+static void DEVMGR_FireAlarmHandleEvent(const FIREALARM_EVENT* event)
+{
+    gFIREALARM_MGR.hasNewEvent = true;
+    if (event->condition == CONDITION_ACTIVATED) {
+        // 触发报警处理逻辑
+    }
+}
+
+static void DEVMGR_FireAlarmHandleFault(const FIREALARM_EVENT* event)
+{
+    // 故障处理逻辑
+}
+
+static void DEVMGR_FireAlarmHandleDisable(const FIREALARM_EVENT* event)
+{
+    // 屏蔽处理逻辑
+}
+
 static void DEVMGR_FireAlarmSetOnline(void)
 {
     if (!gFIREALARM_MGR.isOnline) {
         gFIREALARM_MGR.isOnline = true;
-        // 可以在这里添加在线状态变化的处理逻辑
+        // 可添加上线通知
     }
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：设置火警报警器离线状态
-* 注意事项：NA
-* 输入参数：NA
-* 输出参数：NA
-* 返回参数：NA
-****************************************************************************************************
-*/
 static void DEVMGR_FireAlarmSetOffline(void)
 {
     if (gFIREALARM_MGR.isOnline) {
         gFIREALARM_MGR.isOnline = false;
-        // 可以在这里添加离线状态变化的处理逻辑
+        // 可添加下线通知
     }
 }
 
-/*!
-****************************************************************************************************
-* 功能描述：获取设备类型名称
-* 注意事项：NA
-* 输入参数：typeCode -- 设备类型代码
-* 输出参数：NA
-* 返回参数：设备类型名称字符串
-****************************************************************************************************
-*/
+/* 设备类型映射表 */
+typedef struct { const char *code; const char *name; } DeviceMap;
+static const DeviceMap fireMap[] = {
+    {"FD","通用探测器"},{"FH","温感"},{"FS","烟感"},{"FM","手动报警按钮"},
+    {"GD","气体探测器"},{"GO","氧气探测器"},{"GS","硫化氢探测器"},{"GH","碳氢化合物探测器"},
+    {"SF","细水雾流量开关"},{"SV","细水雾水动阀释放"},{"CO","CO2手动释放"},{"OT","其它"}
+};
+
 static const char* DEVMGR_FireAlarmGetDeviceTypeName(const char* typeCode)
 {
-    if (typeCode == NULL) {
-        return "未知";
+    if (!typeCode) return "未知";
+    for (size_t i=0;i<sizeof(fireMap)/sizeof(fireMap[0]);i++) {
+        if (strcmp(typeCode, fireMap[i].code)==0) return fireMap[i].name;
     }
-    
-    if (strcmp(typeCode, "FD") == 0) return "通用探测器";
-    if (strcmp(typeCode, "FH") == 0) return "温感";
-    if (strcmp(typeCode, "FS") == 0) return "烟感";
-    if (strcmp(typeCode, "FM") == 0) return "手动报警按钮";
-    if (strcmp(typeCode, "GD") == 0) return "气体探测器";
-    if (strcmp(typeCode, "GO") == 0) return "氧气探测器";
-    if (strcmp(typeCode, "GS") == 0) return "硫化氢探测器";
-    if (strcmp(typeCode, "GH") == 0) return "碳氢化合物探测器";
-    if (strcmp(typeCode, "SF") == 0) return "细水雾流量开关";
-    if (strcmp(typeCode, "SV") == 0) return "细水雾水动阀释放";
-    if (strcmp(typeCode, "CO") == 0) return "CO2手动释放";
-    if (strcmp(typeCode, "OT") == 0) return "其它";
-    
     return "未知";
 }
