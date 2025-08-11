@@ -80,8 +80,8 @@
 */
 
 typedef enum {
-
-	DEVICE_MONITOR_ControlWord = 0, 			// 控制字
+	DEVICE_Online_Status = 0,			//在线帧
+	DEVICE_MONITOR_ControlWord, 			// 控制字
 	DEVICE_MONITOR_OutputFrequency,				// 输出频率
 	DEVICE_MONITOR_MotorCurrent,        		// 电机电流
 	DEVICE_MONITOR_MotorVoltage,        		// 电机电压
@@ -180,11 +180,9 @@ void COMMGR_CANInit(void)
 	G_CAN_MGR.FrameProcessed = 1;
 	G_CAN_MGR.Address = 1;
 	G_CAN_MGR.Vfd_Address = 1;
-	G_CAN_MGR.DEVICE_SENDData = DEVICE_MONITOR_ControlWord;
+	G_CAN_MGR.DEVICE_SENDData = DEVICE_Online_Status;
 	G_CAN_MGR.cc01_CC02_Y1_Data_Rx = 0;
-//	G_CAN_MGR.cc01_X_Data_Rx = 0;
 	G_CAN_MGR.cc01_CC02_Y2_Y3_Data_Rx = 0;
-//	G_CAN_MGR.cc02_X_Data_Rx = 0;
 
 	// 初始化ACK_can数组
 	G_CAN_MGR.ACK_can[0] = 0xaa;
@@ -228,7 +226,7 @@ void COMMGR_CANInit(void)
 void COMMGR_CANHandle(void)
 {
 	// 实时根据编码器设置CAN通信地址
-	DRVMGR_CANSetup(G_CAN_MGR.Address, CAN_MASK);
+//	DRVMGR_CANSetup(G_CAN_MGR.Address, CAN_MASK);
 	
 	// 判断是否离线
 	if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.Tmr)) {
@@ -237,12 +235,7 @@ void COMMGR_CANHandle(void)
 		G_CAN_MGR.Online = 0;
 	}
 
-	//	发送在线帧
-	if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrOnlineFrame)) {
-		// 重置掉线检测定时器
-		DRVMGR_TimerStart(&G_CAN_MGR.TmrOnlineFrame, 100);
-		COMMGR_CANSendOnlineFrame();
-	}
+
 	// 处理接收到的消息
 	if (G_CAN_MGR.FrameExist) {
 		G_CAN_MGR.FrameExist = 0;
@@ -616,14 +609,14 @@ void COMMGR_CANSendOnlineFrame(void)
     canmsg.Len = 8;
     memcpy(canmsg.Body, data, 8);
     // 发送到CAN1
-    DRVMGR_CANSend(&canmsg);
-
+//    DRVMGR_CANSend(&canmsg);
+    COMMGR_CANSendResponse(&canmsg);
     // 组装CAN2在线帧（内容相同）
-    canmsg.ID = G_CAN_MGR.ProtocolModNumber<<13; // 如有不同可单独设置
-    canmsg.Len = 8;
-    memcpy(canmsg.Body, data, 8);
+//    canmsg.ID = G_CAN_MGR.ProtocolModNumber<<13; // 如有不同可单独设置
+//    canmsg.Len = 8;
+//    memcpy(canmsg.Body, data, 8);
     // 发送到CAN2
-    DRVMGR_CAN2Send(&canmsg);
+//    DRVMGR_CAN2Send(&canmsg);
 }
 
 /**
@@ -664,6 +657,14 @@ static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM){
 	}
 
 	switch(G_CAN_MGR.DEVICE_SENDData) {
+
+		case DEVICE_Online_Status:
+		if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrMonVal)){
+			DRVMGR_TimerStart(&G_CAN_MGR.TmrMonVal, SEND_PERIOD_MonVal);
+			COMMGR_CANSendOnlineFrame();
+			G_CAN_MGR.DEVICE_SENDData = DEVICE_MONITOR_ControlWord;
+		}
+		break;
 		case DEVICE_MONITOR_ControlWord:
 			if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrMonVal)){
 				DRVMGR_TimerStart(&G_CAN_MGR.TmrMonVal, SEND_PERIOD_MonVal);
@@ -745,7 +746,7 @@ static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM){
 			if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrMonVal)){
 				DRVMGR_TimerStart(&G_CAN_MGR.TmrMonVal, SEND_PERIOD_MonVal);
 				COMMGR_CANSendDOData(MODULE_DIGITAL_OUTPUT_CANID);
-				G_CAN_MGR.DEVICE_SENDData = DEVICE_MONITOR_ControlWord;
+				G_CAN_MGR.DEVICE_SENDData = DEVICE_Online_Status;
 			}
 			break;
 #if 0
@@ -753,7 +754,7 @@ static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM){
 			if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrMonVal)){
 				DRVMGR_TimerStart(&G_CAN_MGR.TmrMonVal, SEND_PERIOD_MonVal);
 				COMMGR_CANSendFireAlarmData(CAN_ID_FIREALARM);
-				G_CAN_MGR.DEVICE_SENDData = DEVICE_MONITOR_ControlWord;
+				G_CAN_MGR.DEVICE_SENDData = DEVICE_Online_Status;
 			}
 			break;
 #endif

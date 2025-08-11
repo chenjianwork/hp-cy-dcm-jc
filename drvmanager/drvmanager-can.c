@@ -470,7 +470,7 @@ void DRVMGR_CAN2Setup(uint32_t address, uint32_t mask)
 	if ((address == G_CAN2_MGR.Address) && (mask == G_CAN2_MGR.Mask)) {
 		return;
 	}
-	
+
 	G_CAN2_MGR.Address = address;
 	G_CAN2_MGR.Mask = mask;
 
@@ -503,8 +503,8 @@ static void DRVMGR_CANInitIDArray(void)
 	G_CANID_ARRAY[11] = 0x1c080;
 	G_CANID_ARRAY[12] = 0x00032080;
 	G_CANID_ARRAY[13] = 0x00A10550;
-	
-	G_CANID_COUNT = 14;  // 设置当前CANID数量
+	G_CANID_ARRAY[14] = 0x00034080;
+	G_CANID_COUNT = 15;  // 设置当前CANID数量
 }
 
 /*!
@@ -519,12 +519,12 @@ static void DRVMGR_CANInitIDArray(void)
 static uint32_t DRVMGR_CANCalculateMask(void)
 {
 	uint32_t mask = 0xFFFFFFFF;  // 初始化为全1
-	
+
 	// 遍历所有CANID，计算通用掩码
 	for (uint8_t i = 0; i < G_CANID_COUNT; i++) {
 		mask &= G_CANID_ARRAY[i];  // 按位与操作
 	}
-	
+
 	return mask;
 }
 
