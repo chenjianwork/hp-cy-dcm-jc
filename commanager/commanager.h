@@ -49,5 +49,14 @@ void 	COMMGR_DBGHandle(void);
 void 	COMMGR_CANSendOnlineFrame(void);
 uint8_t COMMGR_CANGetVfdAddress(void);
 
+//获取引脚状态
 uint8_t COMMGR_CANGetPLCToDeviceData(void);
+bool COMMGR_CANGetMutePinStatus(void);
+bool COMMGR_CANGetResetPinStatus(void);
+// 设置消音&复位
+void COMMGR_CANSetResetPinStatus(uint8_t status);
+void COMMGR_CANSetMutePinStatus(uint8_t status);
+
+
+
 #endif /* COMMANAGER_COMMANAGER_H_ */

@@ -70,7 +70,11 @@ struct _PS_PARA {
 */
 void DEVMGR_Init(void);
 void DEVMGR_Handle(void);
-
+/*!
+****************************************************************************************************
+* 压力传感器
+****************************************************************************************************
+*/
 bool  DEVMGR_PT206IsLost(void);
 float DEVMGR_PT206InqRange(void);
 float DEVMGR_PT206InqRatio(void);
@@ -92,7 +96,11 @@ int	  DEVMGR_PT207SetPara(const struct _PS_PARA* para);
 float DEVMGR_PT207InqValue(void);
 void  DEVMGR_PT207OVPSChkEnable(void);
 void  DEVMGR_PT207OVPSChkDisable(void);
-
+/*!
+****************************************************************************************************
+* 变频器
+****************************************************************************************************
+*/
 bool	 DEVMGR_VFDIsOnline(void);
 void	 DEVMGR_VFDStart(void);
 int		 DEVMGR_VFDStartReverse(void);
@@ -109,6 +117,14 @@ float	 DEVMGR_VFDGetSpeed(void);
 uint32_t DEVMGR_VFDGetFault(void);
 int		 DEVMGR_VFDSetFrequency(float freq_hz);
 
+/*!
+****************************************************************************************************
+* 火警报警器
+****************************************************************************************************
+*/
+uint64_t DEVMGR_FireAlarmGetFireAlarmStatus(void);
+bool DEVMGR_HasEngineAlarm(void);
+void DEVMGR_FireAlarmClearAll(void);
 /*!
 ****************************************************************************************************
 * 内联函数

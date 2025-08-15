@@ -9,6 +9,7 @@
 */
 #include "drvmanager/drvmanager.h"
 #include "sysmanager/sysmanager.h"
+#include "commanager/commanager.h"
 #include "stm32f4xx.h"
 #include "stm32f4xx_gpio.h"
 #include "stm32f4xx_rcc.h"
@@ -18,7 +19,7 @@
 * 常量定义
 ****************************************************************************************************
 */
-
+#define  DIO_AUDIO_DUETIME 	         (180000)			// 按下消音后，半小时不检测告警
 /*!
 ****************************************************************************************************
 * 类型定义
@@ -33,8 +34,7 @@
 struct _DIO_MGR {
 
 	uint8_t ProtocolModNumber;		// 协议模块编号
-	uint8_t	Y_Data_Rx;			// 接收cc01 cc02 Y引脚的数据
-
+	struct _TIMER TmrAudioAlarm;	// 恢复声报警
 };
 
 /*!
@@ -69,10 +69,7 @@ void DRVMGR_DIOInit(void)
 {
 	DRVMGR_DIOHwPinInit();
 	G_DIO_MGR.ProtocolModNumber = SYSMGR_Para_HwDevNum();
-	G_DIO_MGR.Y_Data_Rx = 0;
-//	G_DIO_MGR.cc01_X_Data_Rx = 0;
-//	G_DIO_MGR.cc02_Y_Data_Rx = 0;
-//	G_DIO_MGR.cc02_X_Data_Rx = 0;
+	DRVMGR_TimerStart(&G_DIO_MGR.TmrAudioAlarm, 100);
 }
 
 /*!
@@ -419,40 +416,78 @@ void DRVMGR_DIO_DIGetBitsStatus(uint16_t *value)
 */
 uint16_t DRVMGR_DIO_GetDOBits(void)
 {
-    uint8_t runState = SYSMGR_InqRunState();
-    uint16_t all_di_status;
-	uint16_t bitsStatus;
+    uint8_t runState;				//  获取协议模块工作状态
+    uint16_t all_di_status;			//	获取所有X引脚的状态
+	uint16_t bitsStatus;			//	输出所有Y引脚的状态
+	uint8_t x1_state; 				// 	获取X1状态
+	uint8_t x2_state;				// 	获取X2状态
+	uint8_t	Y_Data_Rx;				//  接收cc01 cc02 Y引脚的数据
+	uint8_t 	ProtocolModNumber;	// 	协议模块编号
+	bool 	HasAudioVisualAlarm;	//	是否有声光报警
+	bool    HasMuteStatus;			//	是否有消音信号
+	bool	HasResetStatus;			//  是否有复位信号
+
     // 初始化输出数组
     bitsStatus = 0;
+    ProtocolModNumber = SYSMGR_Para_HwDevNum();
+    runState = SYSMGR_InqRunState();
     //获取X1 X2的状态
     DRVMGR_DIO_DIGetBitsStatus(&all_di_status);
 
-    uint8_t x1_state = (all_di_status & 0x0001) ? 1 : 0;  // 获取X1状态
-    uint8_t x2_state = (all_di_status & 0x0002) ? 1 : 0;  // 获取X2状态
+    x1_state = (all_di_status & 0x0001) ? 1 : 0;
+    x2_state = (all_di_status & 0x0002) ? 1 : 0;
 
-	G_DIO_MGR.Y_Data_Rx = COMMGR_CANGetPLCToDeviceData();
-
-	
-
+	Y_Data_Rx = COMMGR_CANGetPLCToDeviceData();
+	HasAudioVisualAlarm = DEVMGR_HasEngineAlarm();
+	HasMuteStatus = COMMGR_CANGetMutePinStatus();
+	HasResetStatus = COMMGR_CANGetResetPinStatus();
     // 根据运行状态设置输出
     if (runState == RUNSTATE_RUNNING) {
         // 运行状态下，Y4和Y5为高电平（冷却风机开启）
-    	bitsStatus |= 0x18; // 设置Y4和Y5位 (0x08 | 0x10)
+    	bitsStatus |= (1 << 3) | (1 << 4); // 设置 Y4 和 Y5 位
     }
     // 检查PD3和PD4引脚状态
     if (x1_state == 1) {
         // PD3低电平时，Y1需要高电平
-    	bitsStatus |= 0x01; // 设置Y1位
+    	bitsStatus |= (1 << 0); // 设置 Y1 位
     }
     if (x2_state == 1) {
         // PD4低电平时，Y2和Y3需要高电平
-    	bitsStatus |= 0x06; // 设置Y2和Y3位 (0x02 | 0x04)
+    	bitsStatus |= (1 << 1) | (1 << 2); // 设置 Y2 和 Y3 位
     }
     // 检查X1和X2是否都为低电平
     if (x1_state == 1 && x2_state == 1) {
         // 如果X1和X2都为低电平，设置Y1、Y2、Y3为高电平
-    	bitsStatus |= 0x07; // 设置Y1、Y2、Y3位 (0x01 | 0x02 | 0x04)
+    	bitsStatus |= (1 << 0) | (1 << 1) | (1 << 2); // 设置 Y1、Y2、Y3 位
         // 设置为空闲模式
+    }
+    //是否有声光报警
+    if (DRVMGR_TimerIsExpiration(&G_DIO_MGR.TmrAudioAlarm))
+    {
+    	if(ProtocolModNumber == MODULE17_DEVNUM){
+    		bitsStatus = (bitsStatus & ~(1 << 5)) | (HasAudioVisualAlarm ? (1 << 5) : 0);
+    	}
+    }
+    else
+    {
+    	bitsStatus &= ~(1 << 5);
+	}
+    //是否有消音
+    if(HasMuteStatus)
+    {
+    	//如果协议模块为CC01,消音信号关闭Y6
+    	if(ProtocolModNumber == MODULE17_DEVNUM)
+    	{
+    		bitsStatus &= ~(1 << 5);
+    		COMMGR_CANSetMutePinStatus(0);
+    		DRVMGR_TimerStart(&G_DIO_MGR.TmrAudioAlarm, DIO_AUDIO_DUETIME);
+    	}
+    }
+    //是否有复位信号
+    if(HasResetStatus){
+    	bitsStatus &= ~((1 << 0) | (1 << 1) | (1 << 2) | (1 << 5));
+    	COMMGR_CANSetResetPinStatus(0);
+    	DEVMGR_FireAlarmClearAll();
     }
     //出现告警 立即停机
     if (x1_state == 1 || x2_state == 1){
@@ -460,7 +495,7 @@ uint16_t DRVMGR_DIO_GetDOBits(void)
     }
 	// |上来自PLC发送的Y状态
 
-    bitsStatus = bitsStatus | G_DIO_MGR.Y_Data_Rx;
+    bitsStatus = bitsStatus | Y_Data_Rx;
 
     return bitsStatus;
 }
