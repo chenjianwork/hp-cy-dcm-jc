@@ -248,7 +248,7 @@ uint32_t SYSMGR_Para_FlowMeterCount(void)  // 修改返回类型为uint32_t
 */
 uint32_t SYSMGR_Para_HwDevNum(void)  // 修改返回类型为uint32_t
 {
-  //   gRUNPara.HwDevNum = MODULE17_DEVNUM;
+     gRUNPara.HwDevNum = MODULE17_DEVNUM;
     return gRUNPara.HwDevNum;
 }
 

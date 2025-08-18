@@ -28,13 +28,14 @@
 #define SEND_PERIOD_FireAlarm (200)	 //轮询发送火警报警器状态  单位毫秒
 
 // 特殊CAN ID定义
-#define CAN_ID_BUS_SWITCH   (0x00A10550)  // 总线切换命令ID
-#define CAN_ID_HOST_STATE   (0x00012080)  // 主机状态命令ID 
-#define CAN_ID_HOST_STATE2  (0x00016080)  // 2号泵主机状态命令ID
-#define CAN_ID_VFD_CONTROL  (0x00034080)  // 变频器控制命令ID
-#define CAN_ID_FIREALARM    (0x00024080)  // 火警报警命令ID	CC02
-#define CAN_ID_MUTE_RESET	(0x00014020)  // 消音&复位命令ID
-
+#define CAN_ID_BUS_SWITCH    (0x00A10550)  // 总线切换命令ID
+#define CAN_ID_HOST_STATE    (0x00012080)  // 主机状态命令ID
+#define CAN_ID_HOST_STATE2   (0x00016080)  // 2号泵主机状态命令ID
+#define CAN_ID_VFD_CONTROL   (0x00034080)  // 变频器控制命令ID
+#define CAN_ID_FIREALARM     (0x00024080)  // 火警报警命令ID	CC02
+#define CAN_ID_MUTE_RESET	 (0x00014020)  // 消音&复位命令ID
+#define CAN_ID_PUMP_SETPOINT (0x00034040)  // 泵目标压力设定值ID
+#define CAN_ID_VERSION		 (0x11234567)  // 发送版本号信息给屏幕
 // 实时数据CAN ID定义
 #define MODULE17_CAN_ID    (0x00022040)  // CC01协议模块
 #define MODULE17_DIGITAL_OUTPUT_CANID 	   (0x00022060)
@@ -128,12 +129,14 @@ struct _CAN_MGR {
 	uint8_t ProtocolModNumber;		// 协议模块编号
 	uint8_t res_CAN_S;				// 协议模块错误码
 	uint8_t ACK_can[8];
+	float 	PumbSetPoint;			// 泵目标压力设置值
 	struct _TIMER Tmr;
 	struct _TIMER TmrBackup;	// 备机状态超时检测定时器
 	struct _TIMER TmrBusSwitch;	// 总线切换超时检测定时器
 	struct _TIMER TmrOnlineFrame;	// 在线帧超时检测定时器
 	struct _TIMER TmrMonVal;		// 监控值（流量计、压力传感器、流量计数据）检测定时器
 	struct _TIMER TmrFireAlarm;		// 火警报警器检测定时器
+	struct _TIMER TmrVersion;		// 版本号检测定时器
 };
 
 
@@ -160,6 +163,7 @@ static void COMMGR_CANMonValTxProcess(HwDevNum MODULE_DEVNUM);
 static void COMMGR_CANSendDIData(uint32_t can_id);
 static void COMMGR_CANSendDOData(uint32_t can_id);
 static void COMMGR_CANSendFireAlarmData(uint32_t can_id);
+static void COMMGR_CANSendVersionData(uint32_t can_id);
 /*!
 ****************************************************************************************************
 * 接口函数
@@ -189,6 +193,7 @@ void COMMGR_CANInit(void)
 	G_CAN_MGR.DEVICE_SENDData = DEVICE_Online_Status;
 	G_CAN_MGR.cc01_CC02_Y1_Data_Rx = 0;
 	G_CAN_MGR.cc01_CC02_Y2_Y3_Data_Rx = 0;
+	G_CAN_MGR.PumbSetPoint = 0.8;
 
 
 	// 初始化ACK_can数组
@@ -220,7 +225,8 @@ void COMMGR_CANInit(void)
 	DRVMGR_TimerStart(&G_CAN_MGR.Tmr, CAN_ONLINE_DUETIME);
 	DRVMGR_TimerStart(&G_CAN_MGR.TmrOnlineFrame, 100);
 	DRVMGR_TimerStart(&G_CAN_MGR.TmrFireAlarm, 200);
-
+	// 启动版本号信息检测定时器 TmrVersion
+	DRVMGR_TimerStart(&G_CAN_MGR.TmrVersion, 200);
 }
 
 /*!
@@ -329,7 +335,13 @@ void COMMGR_CANHandle(void)
 				// reset 引脚：X10.2
 				G_CAN_MGR.reset = (G_CAN_MGR.CANMsg.Body[0] & (1 << 2)) ? 1 : 0;
 				break;
-
+			case CAN_ID_PUMP_SETPOINT:
+				//泵目标压力设置值
+				if(G_CAN_MGR.CANMsg.Body[0] == 0x09)
+				{
+					BitConverter_BytesToSingle_LittleEndian(&G_CAN_MGR.PumbSetPoint,G_CAN_MGR.CANMsg.Body,1);
+				}
+				break;
 			default:
 				break;
 		}
@@ -341,7 +353,12 @@ void COMMGR_CANHandle(void)
 		DRVMGR_TimerStart(&G_CAN_MGR.TmrFireAlarm, SEND_PERIOD_FireAlarm);
 		COMMGR_CANSendFireAlarmData(CAN_ID_FIREALARM);
 	}
-
+	// 发送版本号信息
+	if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrVersion)) {
+		// 重置版本号信息检测定时器
+		DRVMGR_TimerStart(&G_CAN_MGR.TmrVersion, 2000);
+		COMMGR_CANSendVersionData(CAN_ID_VERSION);
+	}
 	// 检查状态超时
 	if (DRVMGR_TimerIsExpiration(&G_CAN_MGR.TmrBackup)) {
 		// 备机状态超时，恢复默认状态
@@ -350,9 +367,7 @@ void COMMGR_CANHandle(void)
 	}
 
 	// 处理实时数据发送
-	//if (G_CAN_MGR.Online) {
-		COMMGR_CANMonValTxProcess(G_CAN_MGR.ProtocolModNumber);
-//	}
+	COMMGR_CANMonValTxProcess(G_CAN_MGR.ProtocolModNumber);
 }
 
 /*!
@@ -827,6 +842,34 @@ static void COMMGR_CANSendFireAlarmData(uint32_t can_id)
     COMMGR_CANSendResponse(&canmsg);
 }
 
+/*!
+****************************************************************************************************
+* 功能描述：发送协议模块版本号信息数据到CAN总线
+* 注意事项：NA
+* 输入参数：can_id -- CAN ID
+* 输出参数：NA
+* 返回参数：NA
+****************************************************************************************************
+*/
+static void COMMGR_CANSendVersionData(uint32_t can_id)
+{
+    struct _CAN_MSG canmsg;
+    // 版本号信息
+    canmsg.Body[0] = 0x01;
+    canmsg.Body[1] = 0x02;
+    canmsg.Body[2] = 0x01;
+    canmsg.Body[3] = 0x02;
+    canmsg.Body[4] = 0x01;
+    canmsg.Body[5] = 0x02;
+    canmsg.Body[6] = 0x01;
+    canmsg.Body[7] = 0x02;
+
+    // 填充 CAN 帧信息
+    canmsg.ID  = can_id;
+    canmsg.Len = 8;
+
+    COMMGR_CANSendResponse(&canmsg);
+}
 
 /*!
 ****************************************************************************************************
@@ -899,4 +942,18 @@ void COMMGR_CANSetMutePinStatus(uint8_t status)
 void COMMGR_CANSetResetPinStatus(uint8_t status)
 {
 	G_CAN_MGR.reset = status;
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：获取泵目标压力设置值
+* 注意事项：NA
+* 输入参数：NA
+* 输出参数：NA
+* 返回参数：
+****************************************************************************************************
+*/
+float COMMGR_CANGetPumbSetPoint(void)
+{
+	return G_CAN_MGR.PumbSetPoint;
 }

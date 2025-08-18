@@ -504,7 +504,8 @@ static void DRVMGR_CANInitIDArray(void)
 	G_CANID_ARRAY[12] = 0x00032080;
 	G_CANID_ARRAY[13] = 0x00A10550;
 	G_CANID_ARRAY[14] = 0x00034080;
-	G_CANID_COUNT = 15;  // 设置当前CANID数量
+	G_CANID_ARRAY[15] = 0x00034040;		//泵目标压力设定值
+	G_CANID_COUNT = 16;  // 设置当前CANID数量
 }
 
 /*!

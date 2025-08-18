@@ -61,7 +61,7 @@ void BitConverter_BytesToUInt16(uint16_t* value, const uint8_t* buffer, size_t s
 void BitConverter_BytesToUInt32(uint32_t* value, const uint8_t* buffer, size_t startIndex);
 void BitConverter_BytesToSingle(float* value, const uint8_t* buffer, size_t startIndex);
 void BitConverter_BytesToDouble(double* value, const uint8_t* buffer, size_t startIndex);
-
+void BitConverter_BytesToSingle_LittleEndian(float* value, const uint8_t* buffer, size_t startIndex);
 uint32_t BitConverter_BCD2Num(int len, const uint8_t value[], size_t offset);
 uint32_t BitConverter_Num2BCD(uint32_t num);
 /*!

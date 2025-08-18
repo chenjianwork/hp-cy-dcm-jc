@@ -439,6 +439,29 @@ void BitConverter_BytesToSingle(float* value, const uint8_t* buffer, size_t star
 * 返回参数：
 ****************************************************************************************************
 */
+void BitConverter_BytesToSingle_LittleEndian(float* value, const uint8_t* buffer, size_t startIndex)
+{
+	union {
+		uint8_t Buf[4];
+		float	Value;
+	} U;
+
+	U.Buf[0] = buffer[startIndex + 0];
+	U.Buf[1] = buffer[startIndex + 1];
+	U.Buf[2] = buffer[startIndex + 2];
+	U.Buf[3] = buffer[startIndex + 3];
+	value[0] = U.Value;
+}
+
+/*!
+****************************************************************************************************
+* 功能描述：
+* 注意事项：
+* 输入参数：
+* 输出参数：
+* 返回参数：
+****************************************************************************************************
+*/
 void BitConverter_BytesToDouble(double* value, const uint8_t* buffer, size_t startIndex)
 {
 	union {

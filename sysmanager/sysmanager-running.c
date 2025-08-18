@@ -19,7 +19,6 @@
 
 #define ADD_PRE_PERIOD (1000) //周期递增压力，单位毫秒
 
-#define PRESSURE_SP         0.8f    	// 压力设定值(MPa)
 #define PROPORT_VALVE_WORK_MAX  (20)	//电流20mA
 #define PROPORT_VALVE_WORK_MIN  (4) 	//电流4mA
 
@@ -75,6 +74,9 @@ bool SYSMGR_RunningInit(void)
 	// 初始化工作状态
 	G_WRKMGR.State = WORK_INIT;
 
+	// 设置目标压力
+	G_WRKMGR.targetP = COMMGR_CANGetPumbSetPoint();
+
 	// 启动PID周期定时器
 	DRVMGR_TimerStart(&G_WRKMGR.TmrPID, PID_PERIOD);
 	DRVMGR_TimerStart(&G_WRKMGR.TmrVFDChk, 50);
@@ -118,7 +120,7 @@ void SYSMGR_RunningHandle(void)
 					break;
 				}
 				G_WRKMGR.State = WORK_DOING;
-				PIDSetSP(&G_WRKMGR.PID, PRESSURE_SP);
+				PIDSetSP(&G_WRKMGR.PID, G_WRKMGR.targetP);
 			}
 
 			break;
